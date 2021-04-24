@@ -76,6 +76,9 @@ static void vk_init(DisplayContext& ctx) {
 	}
     }
 
+    VkApplicationInfo app_info{};
+    app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app_info.apiVersion = VK_API_VERSION_1_0;
 
     VkInstanceCreateInfo instance_ci{};
     instance_ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -83,6 +86,7 @@ static void vk_init(DisplayContext& ctx) {
     instance_ci.ppEnabledLayerNames = required_layers.data();
     instance_ci.enabledExtensionCount = required_extensions.size();
     instance_ci.ppEnabledExtensionNames = required_extensions.data();
+    instance_ci.pApplicationInfo = &app_info;
 
     if (vkCreateInstance(&instance_ci, nullptr, &ctx.instance) != VK_SUCCESS) {
 	throw std::runtime_error("Failed to create vulkan instance.");
@@ -97,6 +101,7 @@ static void vk_init(DisplayContext& ctx) {
 
     std::vector<const char*> required_device_extensions = {
 	"VK_KHR_swapchain",
+	"VK_KHR_maintenance1"
     };
     
     ctx.physical_device = VK_NULL_HANDLE;
@@ -420,7 +425,7 @@ static void pipeline_init(DisplayContext& ctx) {
 	},
 	{ // color :
 	    1, // location
-	    1, // binding
+	    0, // binding
 	    VK_FORMAT_R32G32B32_SFLOAT, // format
 	    3 * sizeof(float), // offset
 	},
@@ -429,14 +434,9 @@ static void pipeline_init(DisplayContext& ctx) {
     std::vector<VkVertexInputBindingDescription> vertex_bindings = {
 	{ // position :
 	    0, // binding
-	    sizeof(float) * 3, // stride
+	    sizeof(float) * 6, // stride
 	    VK_VERTEX_INPUT_RATE_VERTEX, // input rate
 	},
-	{ // color :
-	    1, // binding
-	    sizeof(float) * 3, // stride
-	    VK_VERTEX_INPUT_RATE_VERTEX, // input rate
-	}	    
     };
 
     VkPipelineVertexInputStateCreateInfo vertex_input{};
@@ -452,9 +452,9 @@ static void pipeline_init(DisplayContext& ctx) {
 
     VkViewport viewport;
     viewport.x = 0.0f;
-    viewport.y = 0.0f;
+    viewport.y = ctx.swapchain_extent.height;
     viewport.width = ctx.swapchain_extent.width;
-    viewport.height = ctx.swapchain_extent.height;
+    viewport.height = -static_cast<float>(ctx.swapchain_extent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
@@ -471,6 +471,11 @@ static void pipeline_init(DisplayContext& ctx) {
 
     VkPipelineRasterizationStateCreateInfo rasterization{};
     rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterization.depthClampEnable = false;
+    rasterization.rasterizerDiscardEnable = false;
+    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterization.cullMode = VK_CULL_MODE_NONE;
+    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample{};
@@ -481,12 +486,21 @@ static void pipeline_init(DisplayContext& ctx) {
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 
     VkPipelineColorBlendAttachmentState color_blend_attachment_state{};
-    color_blend_attachment_state.blendEnable = false;
+    color_blend_attachment_state.blendEnable = true;
+    color_blend_attachment_state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    color_blend_attachment_state.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    color_blend_attachment_state.colorBlendOp = VK_BLEND_OP_ADD;
+    color_blend_attachment_state.colorWriteMask =
+	VK_COLOR_COMPONENT_R_BIT
+	| VK_COLOR_COMPONENT_G_BIT
+	| VK_COLOR_COMPONENT_B_BIT
+	| VK_COLOR_COMPONENT_A_BIT;
     
     VkPipelineColorBlendStateCreateInfo color_blend{};
     color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     color_blend.attachmentCount = 1;
     color_blend.pAttachments = &color_blend_attachment_state;
+    color_blend.logicOpEnable = false;
 
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
 
@@ -556,6 +570,7 @@ int main(int argc, char** argv) {
     vk_init(ctx);
 
     window_init(ctx);
+    XMapRaised(ctx.display, ctx.window);
 
     pipeline_init(ctx);
 
@@ -568,7 +583,63 @@ int main(int argc, char** argv) {
     
     vkCreateSemaphore(ctx.device, &image_ready_ci, nullptr, &image_ready);
 
-    XMapRaised(ctx.display, ctx.window);
+    std::vector<float> vertex_data = {
+	0, .5f, 0, 1, 0, 0,
+	.5f, -.5f, 0, 0, 1, 0,
+	-.5f, -.5f, 0, 0, 0, 1,
+    };
+
+    VkBuffer vertex_buffer;
+    VkBufferCreateInfo vertex_buffer_ci{};
+    vertex_buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vertex_buffer_ci.size = sizeof(vertex_data[0]) * vertex_data.size();
+    vertex_buffer_ci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    vertex_buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vertex_buffer_ci.queueFamilyIndexCount = 1;
+    vertex_buffer_ci.pQueueFamilyIndices = &ctx.queue_family_index;
+
+    if (vkCreateBuffer(ctx.device, &vertex_buffer_ci, nullptr, &vertex_buffer) != VK_SUCCESS) {
+	throw std::runtime_error("Could not create vertex buffer.");
+    }
+
+    VkMemoryRequirements vertex_buffer_memory_requirements;
+    vkGetBufferMemoryRequirements(ctx.device, vertex_buffer, &vertex_buffer_memory_requirements);
+
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(ctx.physical_device, &memory_properties);
+
+    VkDeviceMemory vertex_buffer_memory;
+    VkMemoryAllocateInfo vertex_buffer_memory_ai{};
+    vertex_buffer_memory_ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    vertex_buffer_memory_ai.allocationSize = vertex_buffer_memory_requirements.size;
+    vertex_buffer_memory_ai.memoryTypeIndex =
+	find_memory_type(&memory_properties,
+			 vertex_buffer_memory_requirements.memoryTypeBits,
+			 (VkMemoryPropertyFlagBits) (VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+			  | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT));
+    
+    if (vkAllocateMemory(ctx.device, &vertex_buffer_memory_ai, nullptr, &vertex_buffer_memory) != VK_SUCCESS) {
+	throw std::runtime_error("Could not allocate vertex buffer memory.");
+    }
+
+    float* device_vertex_data;
+    vkMapMemory(ctx.device,
+		vertex_buffer_memory,
+		0,
+		vertex_buffer_memory_requirements.size,
+		0,
+		reinterpret_cast<void**>(&device_vertex_data));
+
+    memcpy(device_vertex_data, vertex_data.data(), sizeof(float) * vertex_data.size());
+
+    vkUnmapMemory(ctx.device, vertex_buffer_memory);
+
+    vkBindBufferMemory(ctx.device, vertex_buffer, vertex_buffer_memory, 0);
+
+    VkSemaphore submit_done;
+    VkSemaphoreCreateInfo submit_done_ci{};
+    submit_done_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    vkCreateSemaphore(ctx.device, &submit_done_ci, nullptr, &submit_done);
 
     bool should_close = false;
     while (!should_close) {
@@ -584,7 +655,7 @@ int main(int argc, char** argv) {
 		}
 		break;
 	    default:
-		std::cerr << "Unhandled event type \n";
+		std::cerr << "Unhandled event type " << event.type << "\n";
 	    }
 	}
 
@@ -609,9 +680,9 @@ int main(int argc, char** argv) {
 	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
 
 	VkClearValue clear_value{};
-	clear_value.color.float32[0] = 1.0f;
-	clear_value.color.float32[1] = 0.0f;
-	clear_value.color.float32[2] = 1.0f;
+	clear_value.color.float32[0] = .1f;
+	clear_value.color.float32[1] = .0f;
+	clear_value.color.float32[2] = .1f;
 	clear_value.color.float32[3] = 1.0f;
 
 	VkRenderPassBeginInfo render_pass_bi{};
@@ -626,17 +697,28 @@ int main(int argc, char** argv) {
 	image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	image_range.levelCount = 1;
 	image_range.layerCount = 1;
-	
+
 	vkCmdBeginRenderPass(command_buffer, &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
 
+	VkDeviceSize bind_offset = 0;
+	vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &bind_offset);
+	
+	vkCmdDraw(command_buffer, vertex_data.size() / 6, 1, 0, 0);
 
 	vkCmdEndRenderPass(command_buffer);
 	vkEndCommandBuffer(command_buffer);
+
+	VkPipelineStageFlags submit_wait_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submit_info.commandBufferCount = 1;
 	submit_info.pCommandBuffers = &command_buffer;
+	submit_info.waitSemaphoreCount = 1;
+	submit_info.pWaitSemaphores = &image_ready;
+	submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores = &submit_done;
 
 	vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
 
@@ -646,7 +728,7 @@ int main(int argc, char** argv) {
 	present_info.pSwapchains = &ctx.swapchain;
 	present_info.pImageIndices = &image_index;
 	present_info.waitSemaphoreCount = 1;
-	present_info.pWaitSemaphores = &image_ready;
+	present_info.pWaitSemaphores = &submit_done;
 	
 	vkQueuePresentKHR(queue, &present_info);
 	
