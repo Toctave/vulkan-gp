@@ -1,6 +1,8 @@
 #include <iostream>
 #include <fstream>
+#include <chrono>
 #include <vector>
+#include <cmath>
 
 #include <string.h>
 
@@ -18,6 +20,7 @@ struct DisplayContext {
     VkExtent2D swapchain_extent;
     VkCommandPool command_pool;
     VkFormat format;
+    VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     VkRenderPass render_pass;
 
@@ -186,6 +189,8 @@ void window_init(DisplayContext& ctx) {
 
     Atom protocol = XInternAtom(ctx.display, "WM_DELETE_WINDOW", false);
     XSetWMProtocols(ctx.display, ctx.window, &protocol, 1);
+
+    XMapRaised(ctx.display, ctx.window);
 
     VkXlibSurfaceCreateInfoKHR surface_ci{};
     surface_ci.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
@@ -504,13 +509,22 @@ static void pipeline_init(DisplayContext& ctx) {
 
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
 
-    VkPipelineLayout layout;
+    std::vector<VkPushConstantRange> push_constants;
+    VkPushConstantRange push_x;
+    push_x.offset = 0;
+    push_x.size = 4;
+    push_x.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    
+    push_constants.push_back(push_x);
+
     VkPipelineLayoutCreateInfo layout_ci{};
     layout_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout_ci.setLayoutCount = descriptor_set_layouts.size();
     layout_ci.pSetLayouts = descriptor_set_layouts.data();
+    layout_ci.pushConstantRangeCount = push_constants.size();
+    layout_ci.pPushConstantRanges = push_constants.data();
 
-    if (vkCreatePipelineLayout(ctx.device, &layout_ci, nullptr, &layout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(ctx.device, &layout_ci, nullptr, &ctx.pipeline_layout) != VK_SUCCESS) {
 	throw std::runtime_error("Could not create pipeline layout.");
     }
     
@@ -525,7 +539,7 @@ static void pipeline_init(DisplayContext& ctx) {
     pipeline_ci.pMultisampleState = &multisample;
     pipeline_ci.pDepthStencilState = &depth_stencil;
     pipeline_ci.pColorBlendState = &color_blend;
-    pipeline_ci.layout = layout;
+    pipeline_ci.layout = ctx.pipeline_layout;
     pipeline_ci.renderPass = ctx.render_pass;
 
     if (vkCreateGraphicsPipelines(ctx.device, VK_NULL_HANDLE, 1, &pipeline_ci, nullptr, &ctx.pipeline) != VK_SUCCESS) {
@@ -622,24 +636,67 @@ static VkBuffer allocate_and_fill_buffer(VkDevice device,
 
     return buffer;
 }
+
+static std::vector<VkCommandBuffer> create_and_record_command_buffers(const DisplayContext& ctx, VkBuffer vertex_buffer, VkBuffer index_buffer, size_t index_count, float x) {
+    std::vector<VkCommandBuffer> command_buffers(ctx.swapchain_images.size());
+    for (size_t i = 0; i < ctx.swapchain_images.size(); i++) {
+	VkCommandBufferAllocateInfo command_buffer_ai{};
+	command_buffer_ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	command_buffer_ai.commandPool = ctx.command_pool;
+	command_buffer_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	command_buffer_ai.commandBufferCount = 1;
+
+	vkAllocateCommandBuffers(ctx.device, &command_buffer_ai, &command_buffers[i]);
+
+	VkCommandBufferBeginInfo command_buffer_bi{};
+	command_buffer_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		
+	vkBeginCommandBuffer(command_buffers[i], &command_buffer_bi);
+	vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
+
+	VkClearValue clear_value{};
+	clear_value.color.float32[0] = .1f;
+	clear_value.color.float32[1] = .0f;
+	clear_value.color.float32[2] = .1f;
+	clear_value.color.float32[3] = 1.0f;
+
+	VkRenderPassBeginInfo render_pass_bi{};
+	render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	render_pass_bi.renderPass = ctx.render_pass;
+	render_pass_bi.framebuffer = ctx.framebuffers[i];
+	render_pass_bi.renderArea = {{0, 0}, ctx.swapchain_extent};
+	render_pass_bi.clearValueCount = 1;
+	render_pass_bi.pClearValues = &clear_value;
+
+	VkImageSubresourceRange image_range{};
+	image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	image_range.levelCount = 1;
+	image_range.layerCount = 1;
+
+	vkCmdBeginRenderPass(command_buffers[i], &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
+
+	VkDeviceSize bind_offset = 0;
+	vkCmdBindVertexBuffers(command_buffers[i], 0, 1, &vertex_buffer, &bind_offset);
+	vkCmdBindIndexBuffer(command_buffers[i], index_buffer, 0, VK_INDEX_TYPE_UINT32);
+	
+	vkCmdPushConstants(command_buffers[i], ctx.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 4, &x);
+	
+	vkCmdDrawIndexed(command_buffers[i], index_count, 1, 0, 0, 0);
+
+	vkCmdEndRenderPass(command_buffers[i]);
+	vkEndCommandBuffer(command_buffers[i]);
+    }
+
+    return command_buffers;
+}
     
 int main(int argc, char** argv) {
     DisplayContext ctx;
     vk_init(ctx);
 
     window_init(ctx);
-    XMapRaised(ctx.display, ctx.window);
 
     pipeline_init(ctx);
-
-    VkQueue queue;
-    vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &queue);
-
-    VkSemaphore image_ready;
-    VkSemaphoreCreateInfo image_ready_ci{};
-    image_ready_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    
-    vkCreateSemaphore(ctx.device, &image_ready_ci, nullptr, &image_ready);
 
     std::vector<float> vertex_data = {
 	-.5f, -.5f, 0, 1, 0, 0,
@@ -666,12 +723,24 @@ int main(int argc, char** argv) {
 						     vertex_indices.size(),
 						     VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
+    VkSemaphore image_ready;
+    VkSemaphoreCreateInfo image_ready_ci{};
+    image_ready_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    
+    vkCreateSemaphore(ctx.device, &image_ready_ci, nullptr, &image_ready);
+
     VkSemaphore submit_done;
     VkSemaphoreCreateInfo submit_done_ci{};
     submit_done_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     vkCreateSemaphore(ctx.device, &submit_done_ci, nullptr, &submit_done);
 
+    VkQueue queue;
+    vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &queue);
+
     bool should_close = false;
+
+    auto t0 = std::chrono::system_clock::now();
+
     while (!should_close) {
 	while (XPending(ctx.display)) {
 	    XEvent event;
@@ -689,62 +758,29 @@ int main(int argc, char** argv) {
 	    }
 	}
 
+	auto t1 = std::chrono::system_clock::now();
+	std::chrono::duration<float> elapsed_duration = t1 - t0;
+	float elapsed = elapsed_duration.count();
+
 	uint32_t image_index;
 	if (vkAcquireNextImageKHR(ctx.device, ctx.swapchain, 0, image_ready, VK_NULL_HANDLE, &image_index) != VK_SUCCESS) {
 	    throw std::runtime_error("Failed to acquire swapchain image");
 	}
 
-	VkCommandBuffer command_buffer;
-	VkCommandBufferAllocateInfo command_buffer_ai{};
-	command_buffer_ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	command_buffer_ai.commandPool = ctx.command_pool;
-	command_buffer_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	command_buffer_ai.commandBufferCount = 1;
-
-	vkAllocateCommandBuffers(ctx.device, &command_buffer_ai, &command_buffer);
-
-	VkCommandBufferBeginInfo command_buffer_bi{};
-	command_buffer_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		
-	vkBeginCommandBuffer(command_buffer, &command_buffer_bi);
-	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
-
-	VkClearValue clear_value{};
-	clear_value.color.float32[0] = .1f;
-	clear_value.color.float32[1] = .0f;
-	clear_value.color.float32[2] = .1f;
-	clear_value.color.float32[3] = 1.0f;
-
-	VkRenderPassBeginInfo render_pass_bi{};
-	render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	render_pass_bi.renderPass = ctx.render_pass;
-	render_pass_bi.framebuffer = ctx.framebuffers[image_index];
-	render_pass_bi.renderArea = {{0, 0}, ctx.swapchain_extent};
-	render_pass_bi.clearValueCount = 1;
-	render_pass_bi.pClearValues = &clear_value;
-
-	VkImageSubresourceRange image_range{};
-	image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	image_range.levelCount = 1;
-	image_range.layerCount = 1;
-
-	vkCmdBeginRenderPass(command_buffer, &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
-
-	VkDeviceSize bind_offset = 0;
-	vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &bind_offset);
-	vkCmdBindIndexBuffer(command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT32);
-	
-	vkCmdDrawIndexed(command_buffer, vertex_indices.size(), 1, 0, 0, 0);
-
-	vkCmdEndRenderPass(command_buffer);
-	vkEndCommandBuffer(command_buffer);
+	float x = std::sin(elapsed);
+	std::vector<VkCommandBuffer> command_buffers =
+	    create_and_record_command_buffers(ctx,
+					      vertex_buffer,
+					      index_buffer,
+					      vertex_indices.size(),
+					      x);
 
 	VkPipelineStageFlags submit_wait_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submit_info.commandBufferCount = 1;
-	submit_info.pCommandBuffers = &command_buffer;
+	submit_info.pCommandBuffers = &command_buffers[image_index];
 	submit_info.waitSemaphoreCount = 1;
 	submit_info.pWaitSemaphores = &image_ready;
 	submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
@@ -764,6 +800,5 @@ int main(int argc, char** argv) {
 	vkQueuePresentKHR(queue, &present_info);
 	
 	vkDeviceWaitIdle(ctx.device);
-	vkFreeCommandBuffers(ctx.device, ctx.command_pool, 1, &command_buffer);
     }
 }
