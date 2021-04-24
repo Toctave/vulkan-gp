@@ -182,7 +182,7 @@ static void vk_init(DisplayContext& ctx) {
 
 void window_init(DisplayContext& ctx) {
     ctx.display = XOpenDisplay(nullptr);
-    ctx.window = XCreateSimpleWindow(ctx.display, XDefaultRootWindow(ctx.display), 0, 0, 640, 480, 0, 0, XBlackPixel(ctx.display, XDefaultScreen(ctx.display)));
+    ctx.window = XCreateSimpleWindow(ctx.display, XDefaultRootWindow(ctx.display), 0, 0, 1920, 1080, 0, 0, XBlackPixel(ctx.display, XDefaultScreen(ctx.display)));
 
     Atom protocol = XInternAtom(ctx.display, "WM_DELETE_WINDOW", false);
     XSetWMProtocols(ctx.display, ctx.window, &protocol, 1);
@@ -475,7 +475,7 @@ static void pipeline_init(DisplayContext& ctx) {
     rasterization.rasterizerDiscardEnable = false;
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
     rasterization.cullMode = VK_CULL_MODE_NONE;
-    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample{};
@@ -564,6 +564,64 @@ static void pipeline_init(DisplayContext& ctx) {
 	}
     }
 }
+
+template<typename T>
+static VkBuffer allocate_and_fill_buffer(VkDevice device,
+					 VkPhysicalDevice physical_device,
+					 uint32_t queue_family_index,
+					 const T* data,
+					 size_t count,
+					 VkBufferUsageFlags usage) {
+    VkBuffer buffer;
+    
+    VkBufferCreateInfo buffer_ci{};
+    buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_ci.size = sizeof(T) * count;
+    buffer_ci.usage = usage;
+    buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    buffer_ci.queueFamilyIndexCount = 1;
+    buffer_ci.pQueueFamilyIndices = &queue_family_index;
+
+    if (vkCreateBuffer(device, &buffer_ci, nullptr, &buffer) != VK_SUCCESS) {
+	throw std::runtime_error("Could not create buffer.");
+    }
+
+    VkMemoryRequirements buffer_memory_requirements;
+    vkGetBufferMemoryRequirements(device, buffer, &buffer_memory_requirements);
+
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+
+    VkDeviceMemory buffer_memory;
+    VkMemoryAllocateInfo buffer_memory_ai{};
+    buffer_memory_ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    buffer_memory_ai.allocationSize = buffer_memory_requirements.size;
+    buffer_memory_ai.memoryTypeIndex =
+	find_memory_type(&memory_properties,
+			 buffer_memory_requirements.memoryTypeBits,
+			 (VkMemoryPropertyFlagBits) (VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+			  | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT));
+    
+    if (vkAllocateMemory(device, &buffer_memory_ai, nullptr, &buffer_memory) != VK_SUCCESS) {
+	throw std::runtime_error("Could not allocate vertex buffer memory.");
+    }
+
+    T* device_data;
+    vkMapMemory(device,
+		buffer_memory,
+		0,
+		sizeof(T) * count,
+		0,
+		reinterpret_cast<void**>(&device_data));
+
+    memcpy(device_data, data, sizeof(T) * count);
+
+    vkUnmapMemory(device, buffer_memory);
+
+    vkBindBufferMemory(device, buffer, buffer_memory, 0);
+
+    return buffer;
+}
     
 int main(int argc, char** argv) {
     DisplayContext ctx;
@@ -584,57 +642,29 @@ int main(int argc, char** argv) {
     vkCreateSemaphore(ctx.device, &image_ready_ci, nullptr, &image_ready);
 
     std::vector<float> vertex_data = {
-	0, .5f, 0, 1, 0, 0,
+	-.5f, -.5f, 0, 1, 0, 0,
 	.5f, -.5f, 0, 0, 1, 0,
-	-.5f, -.5f, 0, 0, 0, 1,
+	.5f, .5f, 0, 0, 0, 1,
+	-.5f, .5f, 0, 1, 1, 1,
     };
 
-    VkBuffer vertex_buffer;
-    VkBufferCreateInfo vertex_buffer_ci{};
-    vertex_buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    vertex_buffer_ci.size = sizeof(vertex_data[0]) * vertex_data.size();
-    vertex_buffer_ci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vertex_buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    vertex_buffer_ci.queueFamilyIndexCount = 1;
-    vertex_buffer_ci.pQueueFamilyIndices = &ctx.queue_family_index;
+    std::vector<uint32_t> vertex_indices = {
+	0, 1, 3,
+	1, 3, 2,
+    };
 
-    if (vkCreateBuffer(ctx.device, &vertex_buffer_ci, nullptr, &vertex_buffer) != VK_SUCCESS) {
-	throw std::runtime_error("Could not create vertex buffer.");
-    }
-
-    VkMemoryRequirements vertex_buffer_memory_requirements;
-    vkGetBufferMemoryRequirements(ctx.device, vertex_buffer, &vertex_buffer_memory_requirements);
-
-    VkPhysicalDeviceMemoryProperties memory_properties;
-    vkGetPhysicalDeviceMemoryProperties(ctx.physical_device, &memory_properties);
-
-    VkDeviceMemory vertex_buffer_memory;
-    VkMemoryAllocateInfo vertex_buffer_memory_ai{};
-    vertex_buffer_memory_ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    vertex_buffer_memory_ai.allocationSize = vertex_buffer_memory_requirements.size;
-    vertex_buffer_memory_ai.memoryTypeIndex =
-	find_memory_type(&memory_properties,
-			 vertex_buffer_memory_requirements.memoryTypeBits,
-			 (VkMemoryPropertyFlagBits) (VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-			  | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT));
-    
-    if (vkAllocateMemory(ctx.device, &vertex_buffer_memory_ai, nullptr, &vertex_buffer_memory) != VK_SUCCESS) {
-	throw std::runtime_error("Could not allocate vertex buffer memory.");
-    }
-
-    float* device_vertex_data;
-    vkMapMemory(ctx.device,
-		vertex_buffer_memory,
-		0,
-		vertex_buffer_memory_requirements.size,
-		0,
-		reinterpret_cast<void**>(&device_vertex_data));
-
-    memcpy(device_vertex_data, vertex_data.data(), sizeof(float) * vertex_data.size());
-
-    vkUnmapMemory(ctx.device, vertex_buffer_memory);
-
-    vkBindBufferMemory(ctx.device, vertex_buffer, vertex_buffer_memory, 0);
+    VkBuffer vertex_buffer = allocate_and_fill_buffer(ctx.device,
+						      ctx.physical_device,
+						      ctx.queue_family_index,
+						      vertex_data.data(),
+						      vertex_data.size(),
+						      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    VkBuffer index_buffer = allocate_and_fill_buffer(ctx.device,
+						     ctx.physical_device,
+						     ctx.queue_family_index,
+						     vertex_indices.data(),
+						     vertex_indices.size(),
+						     VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
     VkSemaphore submit_done;
     VkSemaphoreCreateInfo submit_done_ci{};
@@ -702,8 +732,9 @@ int main(int argc, char** argv) {
 
 	VkDeviceSize bind_offset = 0;
 	vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &bind_offset);
+	vkCmdBindIndexBuffer(command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT32);
 	
-	vkCmdDraw(command_buffer, vertex_data.size() / 6, 1, 0, 0);
+	vkCmdDrawIndexed(command_buffer, vertex_indices.size(), 1, 0, 0, 0);
 
 	vkCmdEndRenderPass(command_buffer);
 	vkEndCommandBuffer(command_buffer);
