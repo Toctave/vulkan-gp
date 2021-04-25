@@ -21,19 +21,19 @@ struct DisplayContext {
     VkPhysicalDevice physical_device;
     VkDevice device;
     uint32_t queue_family_index;
-
-    VkSurfaceKHR surface;
-    VkSwapchainKHR swapchain;
-    VkExtent2D swapchain_extent;
     VkCommandPool command_pool;
-    VkFormat format;
+    
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     VkRenderPass render_pass;
 
+    VkSwapchainKHR swapchain;
+    VkExtent2D swapchain_extent;
+    VkFormat swapchain_format;
     std::vector<VkImage> swapchain_images;
     std::vector<VkFramebuffer> framebuffers;
     
+    VkSurfaceKHR surface;
     Display* display;
     Window window;
 };
@@ -220,7 +220,7 @@ void window_init(DisplayContext& ctx) {
 	    format_index = i;
 	}
     }
-    ctx.format = formats[format_index].format;
+    ctx.swapchain_format = formats[format_index].format;
 
     VkSurfaceCapabilitiesKHR surface_capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx.physical_device, ctx.surface, &surface_capabilities);
@@ -327,7 +327,7 @@ static int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,
     return -1;
 }
 
-static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device, VkFormat format, uint32_t width, uint32_t height) {
+static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device, VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height) {
     VkImage image;
 
     VkImageCreateInfo image_ci{};
@@ -339,7 +339,7 @@ static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device,
     image_ci.extent.height = height;
     image_ci.extent.depth = 1;
     image_ci.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    image_ci.usage = usage;
     image_ci.mipLevels = 1;
     image_ci.arrayLayers = 1;
 
@@ -371,9 +371,17 @@ static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device,
 }
 
 static void pipeline_init(DisplayContext& ctx) {
+    const VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
+    VkImage depth_image = allocate_image(ctx.device,
+					 ctx.physical_device,
+					 depth_format,
+					 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+					 ctx.swapchain_extent.width,
+					 ctx.swapchain_extent.height);
+    
     std::vector<VkAttachmentDescription> attachments;
     VkAttachmentDescription color_attachment{};
-    color_attachment.format = ctx.format;
+    color_attachment.format = ctx.swapchain_format;
     color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -384,9 +392,25 @@ static void pipeline_init(DisplayContext& ctx) {
 
     attachments.push_back(color_attachment);
 
+    VkAttachmentDescription depth_attachment{};
+    depth_attachment.format = depth_format;
+    depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    attachments.push_back(depth_attachment);    
+
     VkAttachmentReference color_attachment_ref{};
     color_attachment_ref.attachment = 0;
     color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depth_attachment_ref{};
+    depth_attachment_ref.attachment = 1;
+    depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     std::vector<VkSubpassDescription> subpasses;
     VkSubpassDescription subpass{};
@@ -395,6 +419,7 @@ static void pipeline_init(DisplayContext& ctx) {
     subpass.pInputAttachments = nullptr;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &color_attachment_ref;
+    subpass.pDepthStencilAttachment = &depth_attachment_ref;
     subpass.preserveAttachmentCount = 0;
 
     subpasses.push_back(subpass);
@@ -485,8 +510,8 @@ static void pipeline_init(DisplayContext& ctx) {
     rasterization.depthClampEnable = false;
     rasterization.rasterizerDiscardEnable = false;
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_NONE;
-    rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample{};
@@ -495,6 +520,9 @@ static void pipeline_init(DisplayContext& ctx) {
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable = true;
+    depth_stencil.depthWriteEnable = true;
+    depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
 
     VkPipelineColorBlendAttachmentState color_blend_attachment_state{};
     color_blend_attachment_state.blendEnable = true;
@@ -562,7 +590,7 @@ static void pipeline_init(DisplayContext& ctx) {
 	fb_color_ci.subresourceRange.baseMipLevel = 0;
 	fb_color_ci.subresourceRange.levelCount = 1;
 	fb_color_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	fb_color_ci.format = ctx.format;
+	fb_color_ci.format = ctx.swapchain_format;
 	fb_color_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
 
 	VkImageView fb_color;
@@ -570,12 +598,29 @@ static void pipeline_init(DisplayContext& ctx) {
 	    throw std::runtime_error("Could not create framebuffer color attachment.");
 	}
 
+	VkImageViewCreateInfo fb_depth_ci{};
+	fb_depth_ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	fb_depth_ci.image = depth_image;
+	fb_depth_ci.subresourceRange.baseArrayLayer = 0;
+	fb_depth_ci.subresourceRange.layerCount = 1;
+	fb_depth_ci.subresourceRange.baseMipLevel = 0;
+	fb_depth_ci.subresourceRange.levelCount = 1;
+	fb_depth_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+	fb_depth_ci.format = depth_format;
+	fb_depth_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+	VkImageView fb_depth;
+	if (vkCreateImageView(ctx.device, &fb_depth_ci, nullptr, &fb_depth) != VK_SUCCESS) {
+	    throw std::runtime_error("Could not create framebuffer depth attachment.");
+	}
+
+	std::vector<VkImageView> fb_attachments = {fb_color, fb_depth};
 	VkFramebufferCreateInfo framebuffer_ci{};
 	framebuffer_ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	framebuffer_ci.width = ctx.swapchain_extent.width;
 	framebuffer_ci.height = ctx.swapchain_extent.height;
-	framebuffer_ci.attachmentCount = 1;
-	framebuffer_ci.pAttachments = &fb_color;
+	framebuffer_ci.attachmentCount = fb_attachments.size();
+	framebuffer_ci.pAttachments = fb_attachments.data();
 	framebuffer_ci.renderPass = ctx.render_pass;
 	framebuffer_ci.layers = 1;
     
@@ -731,19 +776,24 @@ static VkCommandBuffer create_and_record_command_buffer(const DisplayContext& ct
     vkBeginCommandBuffer(command_buffer, &command_buffer_bi);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
 
-    VkClearValue clear_value{};
-    clear_value.color.float32[0] = .1f;
-    clear_value.color.float32[1] = .0f;
-    clear_value.color.float32[2] = .1f;
-    clear_value.color.float32[3] = 1.0f;
+    VkClearValue color_clear_value{};
+    color_clear_value.color.float32[0] = .1f;
+    color_clear_value.color.float32[1] = .0f;
+    color_clear_value.color.float32[2] = .1f;
+    color_clear_value.color.float32[3] = 1.0f;
+
+    VkClearValue depth_clear_value{};
+    depth_clear_value.depthStencil.depth = 1.0f;
+
+    std::vector<VkClearValue> clear_values = {color_clear_value, depth_clear_value};
 
     VkRenderPassBeginInfo render_pass_bi{};
     render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     render_pass_bi.renderPass = ctx.render_pass;
     render_pass_bi.framebuffer = ctx.framebuffers[image_index];
     render_pass_bi.renderArea = {{0, 0}, ctx.swapchain_extent};
-    render_pass_bi.clearValueCount = 1;
-    render_pass_bi.pClearValues = &clear_value;
+    render_pass_bi.clearValueCount = clear_values.size();
+    render_pass_bi.pClearValues = clear_values.data();
 
     VkImageSubresourceRange image_range{};
     image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -779,8 +829,8 @@ int main(int argc, char** argv) {
     };
 
     std::vector<uint32_t> vertex_indices = {
-	0, 1, 3,
-	1, 3, 2,
+	0, 1, 2,
+	0, 2, 3,
     };
 
     Mesh plane = create_mesh(ctx,
@@ -788,6 +838,7 @@ int main(int argc, char** argv) {
 			     vertex_indices.data(), vertex_indices.size());
 
     std::vector<Model> models = {
+	{&plane, glm::translate(glm::vec3(0, 0, 0))},
 	{&plane, glm::translate(glm::vec3(0, 0, 0))},
     };
 
@@ -838,7 +889,9 @@ int main(int argc, char** argv) {
 	std::chrono::duration<float> elapsed_duration = t1 - t0;
 	float elapsed = elapsed_duration.count();
 
-	models[0].transform = glm::rotate(elapsed, glm::vec3(0, 0, 1));
+	models[0].transform =
+	    glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
+	    * glm::rotate(elapsed * 6.0f, glm::vec3(0, 1, 0));
 
 	uint32_t image_index;
 	if (vkAcquireNextImageKHR(ctx.device, ctx.swapchain, 0, image_ready, VK_NULL_HANDLE, &image_index) != VK_SUCCESS) {
