@@ -11,12 +11,16 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE -DVK_USE_PLATFORM_XLIB_KHR)
 
 target_link_libraries(${PROJECT_NAME} Vulkan::Vulkan)
 
-target_sources(vulkan-gp PRIVATE
+target_sources(${PROJECT_NAME} PRIVATE
   src/main.cpp
   shaders/triangle.vert.spv
   shaders/triangle.frag.spv
   )
   
+# GLM
+target_include_directories(${PROJECT_NAME} PRIVATE
+  extern/include/)
+
 # Shaders
 add_custom_target(create-shader-dir ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory shaders)
@@ -28,5 +32,4 @@ add_custom_command(OUTPUT shaders/triangle.frag.spv
   COMMAND glslangValidator -V src/shaders/triangle.frag.glsl -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/triangle.frag.spv
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   DEPENDS create-shader-dir src/shaders/triangle.frag.glsl)
-
 

@@ -9,6 +9,13 @@
 #include <X11/Xlib.h>
 #include <vulkan/vulkan.h>
 
+#include <glm/mat4x4.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+static const glm::vec3 GLOBAL_UP(0, 0, 1);
+
 struct DisplayContext {
     VkInstance instance;
     VkPhysicalDevice physical_device;
@@ -100,7 +107,6 @@ static void vk_init(DisplayContext& ctx) {
 
     std::vector<VkPhysicalDevice> physical_devices(physical_device_count);
     vkEnumeratePhysicalDevices(ctx.instance, &physical_device_count, physical_devices.data());
-
 
     std::vector<const char*> required_device_extensions = {
 	"VK_KHR_swapchain",
@@ -428,10 +434,10 @@ static void pipeline_init(DisplayContext& ctx) {
 	    VK_FORMAT_R32G32B32_SFLOAT, // format
 	    0, // offset
 	},
-	{ // color :
+	{ // UV :
 	    1, // location
 	    0, // binding
-	    VK_FORMAT_R32G32B32_SFLOAT, // format
+	    VK_FORMAT_R32G32_SFLOAT, // format
 	    3 * sizeof(float), // offset
 	},
     };
@@ -439,7 +445,7 @@ static void pipeline_init(DisplayContext& ctx) {
     std::vector<VkVertexInputBindingDescription> vertex_bindings = {
 	{ // position :
 	    0, // binding
-	    sizeof(float) * 6, // stride
+	    sizeof(float) * 5, // stride
 	    VK_VERTEX_INPUT_RATE_VERTEX, // input rate
 	},
     };
@@ -510,12 +516,12 @@ static void pipeline_init(DisplayContext& ctx) {
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
 
     std::vector<VkPushConstantRange> push_constants;
-    VkPushConstantRange push_x;
-    push_x.offset = 0;
-    push_x.size = 4;
-    push_x.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkPushConstantRange push_mvp;
+    push_mvp.offset = 0;
+    push_mvp.size = sizeof(float) * 4 * 4;
+    push_mvp.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     
-    push_constants.push_back(push_x);
+    push_constants.push_back(push_mvp);
 
     VkPipelineLayoutCreateInfo layout_ci{};
     layout_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -637,59 +643,126 @@ static VkBuffer allocate_and_fill_buffer(VkDevice device,
     return buffer;
 }
 
-static std::vector<VkCommandBuffer> create_and_record_command_buffers(const DisplayContext& ctx, VkBuffer vertex_buffer, VkBuffer index_buffer, size_t index_count, float x) {
-    std::vector<VkCommandBuffer> command_buffers(ctx.swapchain_images.size());
-    for (size_t i = 0; i < ctx.swapchain_images.size(); i++) {
-	VkCommandBufferAllocateInfo command_buffer_ai{};
-	command_buffer_ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	command_buffer_ai.commandPool = ctx.command_pool;
-	command_buffer_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	command_buffer_ai.commandBufferCount = 1;
+struct Mesh {
+    VkBuffer vertex_buffer;
+    VkBuffer index_buffer;
+    size_t vertex_count;
+    size_t index_count;
+};
 
-	vkAllocateCommandBuffers(ctx.device, &command_buffer_ai, &command_buffers[i]);
+struct Model {
+    const Mesh* mesh;
+    glm::mat4 transform;
+};
 
-	VkCommandBufferBeginInfo command_buffer_bi{};
-	command_buffer_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+struct Camera {
+    glm::vec3 eye;
+    glm::vec3 target;
+    float fov;
+    float aspect;
+    float near;
+    float far;
+};
+
+glm::mat4 camera_viewproj(const Camera& cam) {
+    glm::mat4 view = glm::lookAt(
+	cam.eye,
+	cam.target,
+	GLOBAL_UP);
+
+    glm::mat4 proj = glm::perspective(
+	cam.fov,
+	cam.aspect,
+	cam.near,
+	cam.far);
+
+    return proj * view;
+}
+
+Mesh create_mesh(const DisplayContext& ctx,
+		 const float* vertex_data, size_t vertex_count,
+		 const uint32_t* index_data, size_t index_count) {
+    Mesh mesh;
+    mesh.vertex_count = vertex_count;
+    mesh.index_count = index_count;
+    mesh.vertex_buffer = allocate_and_fill_buffer(ctx.device,
+						  ctx.physical_device,
+						  ctx.queue_family_index,
+						  vertex_data,
+						  vertex_count,
+						  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    mesh.index_buffer = allocate_and_fill_buffer(ctx.device,
+						 ctx.physical_device,
+						 ctx.queue_family_index,
+						 index_data,
+						 index_count,
+						 VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    return mesh;
+}
+
+static void draw_mesh(VkCommandBuffer command_buffer, const Mesh& mesh) {
+    VkDeviceSize bind_offset = 0;
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &mesh.vertex_buffer, &bind_offset);
+    vkCmdBindIndexBuffer(command_buffer, mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+	
+    vkCmdDrawIndexed(command_buffer, mesh.index_count, 1, 0, 0, 0);
+}
+
+static void draw_model(VkCommandBuffer command_buffer, VkPipelineLayout layout, const glm::mat4& viewproj, const Model& model) {
+    glm::mat4 mvp = viewproj * model.transform;
+    vkCmdPushConstants(command_buffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16 * sizeof(float), glm::value_ptr(mvp));
+    draw_mesh(command_buffer, *model.mesh);
+}
+
+static VkCommandBuffer create_and_record_command_buffer(const DisplayContext& ctx, uint32_t image_index, const std::vector<Model>& models, const Camera& camera) {
+    VkCommandBuffer command_buffer;
+    
+    VkCommandBufferAllocateInfo command_buffer_ai{};
+    command_buffer_ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_buffer_ai.commandPool = ctx.command_pool;
+    command_buffer_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_buffer_ai.commandBufferCount = 1;
+
+    vkAllocateCommandBuffers(ctx.device, &command_buffer_ai, &command_buffer);
+
+    VkCommandBufferBeginInfo command_buffer_bi{};
+    command_buffer_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		
-	vkBeginCommandBuffer(command_buffers[i], &command_buffer_bi);
-	vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
+    vkBeginCommandBuffer(command_buffer, &command_buffer_bi);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
 
-	VkClearValue clear_value{};
-	clear_value.color.float32[0] = .1f;
-	clear_value.color.float32[1] = .0f;
-	clear_value.color.float32[2] = .1f;
-	clear_value.color.float32[3] = 1.0f;
+    VkClearValue clear_value{};
+    clear_value.color.float32[0] = .1f;
+    clear_value.color.float32[1] = .0f;
+    clear_value.color.float32[2] = .1f;
+    clear_value.color.float32[3] = 1.0f;
 
-	VkRenderPassBeginInfo render_pass_bi{};
-	render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	render_pass_bi.renderPass = ctx.render_pass;
-	render_pass_bi.framebuffer = ctx.framebuffers[i];
-	render_pass_bi.renderArea = {{0, 0}, ctx.swapchain_extent};
-	render_pass_bi.clearValueCount = 1;
-	render_pass_bi.pClearValues = &clear_value;
+    VkRenderPassBeginInfo render_pass_bi{};
+    render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_bi.renderPass = ctx.render_pass;
+    render_pass_bi.framebuffer = ctx.framebuffers[image_index];
+    render_pass_bi.renderArea = {{0, 0}, ctx.swapchain_extent};
+    render_pass_bi.clearValueCount = 1;
+    render_pass_bi.pClearValues = &clear_value;
 
-	VkImageSubresourceRange image_range{};
-	image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	image_range.levelCount = 1;
-	image_range.layerCount = 1;
+    VkImageSubresourceRange image_range{};
+    image_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    image_range.levelCount = 1;
+    image_range.layerCount = 1;
 
-	vkCmdBeginRenderPass(command_buffers[i], &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(command_buffer, &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
 
-	VkDeviceSize bind_offset = 0;
-	vkCmdBindVertexBuffers(command_buffers[i], 0, 1, &vertex_buffer, &bind_offset);
-	vkCmdBindIndexBuffer(command_buffers[i], index_buffer, 0, VK_INDEX_TYPE_UINT32);
-	
-	vkCmdPushConstants(command_buffers[i], ctx.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 4, &x);
-	
-	vkCmdDrawIndexed(command_buffers[i], index_count, 1, 0, 0, 0);
-
-	vkCmdEndRenderPass(command_buffers[i]);
-	vkEndCommandBuffer(command_buffers[i]);
+    glm::mat4 viewproj = camera_viewproj(camera);
+    for (const Model& model : models) {
+	draw_model(command_buffer, ctx.pipeline_layout, viewproj, model);
     }
 
-    return command_buffers;
+    vkCmdEndRenderPass(command_buffer);
+    vkEndCommandBuffer(command_buffer);
+
+    return command_buffer;
 }
-    
+
 int main(int argc, char** argv) {
     DisplayContext ctx;
     vk_init(ctx);
@@ -699,10 +772,10 @@ int main(int argc, char** argv) {
     pipeline_init(ctx);
 
     std::vector<float> vertex_data = {
-	-.5f, -.5f, 0, 1, 0, 0,
-	.5f, -.5f, 0, 0, 1, 0,
-	.5f, .5f, 0, 0, 0, 1,
-	-.5f, .5f, 0, 1, 1, 1,
+	-.5f, -.5f, 0, 0, 0, 
+	.5f, -.5f, 0, 1, 0, 
+	.5f, .5f, 0, 1, 1, 
+	-.5f, .5f, 0, 0, 1, 
     };
 
     std::vector<uint32_t> vertex_indices = {
@@ -710,19 +783,22 @@ int main(int argc, char** argv) {
 	1, 3, 2,
     };
 
-    VkBuffer vertex_buffer = allocate_and_fill_buffer(ctx.device,
-						      ctx.physical_device,
-						      ctx.queue_family_index,
-						      vertex_data.data(),
-						      vertex_data.size(),
-						      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    VkBuffer index_buffer = allocate_and_fill_buffer(ctx.device,
-						     ctx.physical_device,
-						     ctx.queue_family_index,
-						     vertex_indices.data(),
-						     vertex_indices.size(),
-						     VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    Mesh plane = create_mesh(ctx,
+			     vertex_data.data(), vertex_data.size(),
+			     vertex_indices.data(), vertex_indices.size());
 
+    std::vector<Model> models = {
+	{&plane, glm::translate(glm::vec3(0, 0, 0))},
+    };
+
+    Camera cam;
+    cam.aspect = static_cast<float>(ctx.swapchain_extent.width) / static_cast<float>(ctx.swapchain_extent.height);
+    cam.eye = glm::vec3(0, -2, 2);
+    cam.target = glm::vec3(0, 0, 0);
+    cam.fov = glm::radians(60.0f);
+    cam.near = 0.01f;
+    cam.far = 100.0f;
+    
     VkSemaphore image_ready;
     VkSemaphoreCreateInfo image_ready_ci{};
     image_ready_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -762,25 +838,25 @@ int main(int argc, char** argv) {
 	std::chrono::duration<float> elapsed_duration = t1 - t0;
 	float elapsed = elapsed_duration.count();
 
+	models[0].transform = glm::rotate(elapsed, glm::vec3(0, 0, 1));
+
 	uint32_t image_index;
 	if (vkAcquireNextImageKHR(ctx.device, ctx.swapchain, 0, image_ready, VK_NULL_HANDLE, &image_index) != VK_SUCCESS) {
 	    throw std::runtime_error("Failed to acquire swapchain image");
 	}
 
-	float x = std::sin(elapsed);
-	std::vector<VkCommandBuffer> command_buffers =
-	    create_and_record_command_buffers(ctx,
-					      vertex_buffer,
-					      index_buffer,
-					      vertex_indices.size(),
-					      x);
+	VkCommandBuffer command_buffer =
+	    create_and_record_command_buffer(ctx,
+					     image_index,
+					     models,
+					     cam);
 
 	VkPipelineStageFlags submit_wait_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submit_info.commandBufferCount = 1;
-	submit_info.pCommandBuffers = &command_buffers[image_index];
+	submit_info.pCommandBuffers = &command_buffer;
 	submit_info.waitSemaphoreCount = 1;
 	submit_info.pWaitSemaphores = &image_ready;
 	submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
