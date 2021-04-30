@@ -25,6 +25,12 @@ struct WMContext {
     Window window;
 };
 
+struct GPUImage {
+    VkImage handle;
+    VkImageView view;
+    VkDeviceMemory memory;
+};
+
 struct GraphicsContext {
     VkInstance instance;
     VkPhysicalDevice physical_device;
@@ -33,6 +39,7 @@ struct GraphicsContext {
     VkCommandPool command_pool;
     
     VkPipelineLayout pipeline_layout;
+    std::vector<VkShaderModule> shaders;
     VkPipeline pipeline;
     VkRenderPass render_pass;
 
@@ -40,7 +47,10 @@ struct GraphicsContext {
     VkExtent2D swapchain_extent;
     VkFormat swapchain_format;
     std::vector<VkImage> swapchain_images;
-    std::vector<VkFence> swapchain_image_in_flight;
+    std::vector<VkImageView> swapchain_image_views;
+    std::vector<int32_t> swapchain_frames;
+
+    GPUImage depth_image;
     std::vector<VkFramebuffer> framebuffers;
     std::vector<VkCommandBuffer> command_buffers;
     
@@ -278,7 +288,26 @@ void window_init(GraphicsContext& ctx) {
         throw std::runtime_error("Could not query swapchain images.");
     }
 
-    ctx.swapchain_image_in_flight.resize(swapchain_image_count, VK_NULL_HANDLE);
+    ctx.swapchain_image_views.resize(swapchain_image_count);
+    for (uint32_t i = 0; i < swapchain_image_count; i++) {
+        VkImageViewCreateInfo fb_color_ci{};
+        fb_color_ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        fb_color_ci.image = ctx.swapchain_images[i];
+        fb_color_ci.subresourceRange.baseArrayLayer = 0;
+        fb_color_ci.subresourceRange.layerCount = 1;
+        fb_color_ci.subresourceRange.baseMipLevel = 0;
+        fb_color_ci.subresourceRange.levelCount = 1;
+        fb_color_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        fb_color_ci.format = ctx.swapchain_format;
+        fb_color_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+        if (vkCreateImageView(ctx.device, &fb_color_ci, nullptr, &ctx.swapchain_image_views[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create swapchain image view.");
+        }
+    }
+    
+
+    ctx.swapchain_frames.resize(swapchain_image_count, -1);
 
     VkCommandPoolCreateInfo command_pool_ci{};
     command_pool_ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -345,8 +374,8 @@ static int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,
     return -1;
 }
 
-static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device, VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height) {
-    VkImage image;
+static GPUImage allocate_image(VkDevice device, VkPhysicalDevice physical_device, VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height) {
+    GPUImage image;
 
     VkImageCreateInfo image_ci{};
     image_ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -361,41 +390,61 @@ static VkImage allocate_image(VkDevice device, VkPhysicalDevice physical_device,
     image_ci.mipLevels = 1;
     image_ci.arrayLayers = 1;
 
-    if (vkCreateImage(device, &image_ci, nullptr, &image) != VK_SUCCESS) {
+    if (vkCreateImage(device, &image_ci, nullptr, &image.handle) != VK_SUCCESS) {
         throw std::runtime_error("Could not create image.");
     }
 
     VkMemoryRequirements image_req;
-    vkGetImageMemoryRequirements(device, image, &image_req);
+    vkGetImageMemoryRequirements(device, image.handle, &image_req);
 
     VkPhysicalDeviceMemoryProperties props;
     vkGetPhysicalDeviceMemoryProperties(physical_device, &props);
 
     int32_t image_mem_type = find_memory_type(&props, image_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    VkDeviceMemory image_memory;
     VkMemoryAllocateInfo image_memory_ai{};
     image_memory_ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     image_memory_ai.allocationSize = image_req.size;
     image_memory_ai.memoryTypeIndex = image_mem_type;
     
-    if (vkAllocateMemory(device, &image_memory_ai, nullptr, &image_memory) != VK_SUCCESS) {
+    if (vkAllocateMemory(device, &image_memory_ai, nullptr, &image.memory) != VK_SUCCESS) {
         throw std::runtime_error("Could not allocate image memory.");
     }
     
-    vkBindImageMemory(device, image, image_memory, 0);
+    vkBindImageMemory(device, image.handle, image.memory, 0);
+
+    VkImageViewCreateInfo view_ci{};
+    view_ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_ci.image = image.handle;
+    view_ci.subresourceRange.baseArrayLayer = 0;
+    view_ci.subresourceRange.layerCount = 1;
+    view_ci.subresourceRange.baseMipLevel = 0;
+    view_ci.subresourceRange.levelCount = 1;
+    view_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    view_ci.format = format;
+    view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+
+    if (vkCreateImageView(device, &view_ci, nullptr, &image.view) != VK_SUCCESS) {
+        throw std::runtime_error("Could not create image view.");
+    }
 
     return image;
 }
 
+static void destroy_image(const GraphicsContext& ctx, GPUImage& image) {
+    vkDestroyImageView(ctx.device, image.view, nullptr);
+    vkFreeMemory(ctx.device, image.memory, nullptr);
+    vkDestroyImage(ctx.device, image.handle, nullptr);
+}
+
 static void pipeline_init(GraphicsContext& ctx) {
     const VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
-    VkImage depth_image = allocate_image(ctx.device,
-                                         ctx.physical_device,
-                                         depth_format,
-                                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                         ctx.swapchain_extent.width,
-                                         ctx.swapchain_extent.height);
+    ctx.depth_image = allocate_image(ctx.device,
+                                          ctx.physical_device,
+                                          depth_format,
+                                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                          ctx.swapchain_extent.width,
+                                          ctx.swapchain_extent.height);
     
     std::vector<VkAttachmentDescription> attachments;
     VkAttachmentDescription color_attachment{};
@@ -458,12 +507,14 @@ static void pipeline_init(GraphicsContext& ctx) {
     vertex_shader_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
     vertex_shader_stage.module = create_shader_module(ctx.device, "shaders/triangle.vert.spv");
     vertex_shader_stage.pName = "main";
+    ctx.shaders.push_back(vertex_shader_stage.module);
 
     VkPipelineShaderStageCreateInfo fragment_shader_stage{};
     fragment_shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragment_shader_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragment_shader_stage.module = create_shader_module(ctx.device, "shaders/triangle.frag.spv");
     fragment_shader_stage.pName = "main";
+    ctx.shaders.push_back(fragment_shader_stage.module);
 
     std::vector<VkPipelineShaderStageCreateInfo> shader_stages = {
         vertex_shader_stage,
@@ -600,39 +651,7 @@ static void pipeline_init(GraphicsContext& ctx) {
 
     ctx.framebuffers.resize(ctx.swapchain_images.size());
     for (size_t i = 0; i < ctx.swapchain_images.size(); i++) {
-        VkImageViewCreateInfo fb_color_ci{};
-        fb_color_ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        fb_color_ci.image = ctx.swapchain_images[i];
-        fb_color_ci.subresourceRange.baseArrayLayer = 0;
-        fb_color_ci.subresourceRange.layerCount = 1;
-        fb_color_ci.subresourceRange.baseMipLevel = 0;
-        fb_color_ci.subresourceRange.levelCount = 1;
-        fb_color_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        fb_color_ci.format = ctx.swapchain_format;
-        fb_color_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-
-        VkImageView fb_color;
-        if (vkCreateImageView(ctx.device, &fb_color_ci, nullptr, &fb_color) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create framebuffer color attachment.");
-        }
-
-        VkImageViewCreateInfo fb_depth_ci{};
-        fb_depth_ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        fb_depth_ci.image = depth_image;
-        fb_depth_ci.subresourceRange.baseArrayLayer = 0;
-        fb_depth_ci.subresourceRange.layerCount = 1;
-        fb_depth_ci.subresourceRange.baseMipLevel = 0;
-        fb_depth_ci.subresourceRange.levelCount = 1;
-        fb_depth_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        fb_depth_ci.format = depth_format;
-        fb_depth_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-
-        VkImageView fb_depth;
-        if (vkCreateImageView(ctx.device, &fb_depth_ci, nullptr, &fb_depth) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create framebuffer depth attachment.");
-        }
-
-        std::vector<VkImageView> fb_attachments = {fb_color, fb_depth};
+        std::vector<VkImageView> fb_attachments = {ctx.swapchain_image_views[i], ctx.depth_image.view};
         VkFramebufferCreateInfo framebuffer_ci{};
         framebuffer_ci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebuffer_ci.width = ctx.swapchain_extent.width;
@@ -879,7 +898,40 @@ static void record_command_buffer(const GraphicsContext& ctx, VkCommandBuffer co
 }
 
 void vk_finalize(GraphicsContext& ctx) {
+    // Pipeline :
     
+    vkFreeCommandBuffers(ctx.device, ctx.command_pool, ctx.command_buffers.size(), ctx.command_buffers.data());
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyFence(ctx.device, ctx.in_flight_fences[i], nullptr);
+        vkDestroySemaphore(ctx.device, ctx.swapchain_image_ready[i], nullptr);
+        vkDestroySemaphore(ctx.device, ctx.swapchain_submit_done[i], nullptr);
+    }
+
+    for (size_t i = 0; i < ctx.swapchain_images.size(); i++) {
+        vkDestroyFramebuffer(ctx.device, ctx.framebuffers[i], nullptr);
+        vkDestroyImageView(ctx.device, ctx.swapchain_image_views[i], nullptr);
+    }
+    destroy_image(ctx, ctx.depth_image);
+
+    for (VkShaderModule shader : ctx.shaders) {
+        vkDestroyShaderModule(ctx.device, shader, nullptr);
+    }
+    vkDestroyPipeline(ctx.device, ctx.pipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.device, ctx.pipeline_layout, nullptr);
+
+    vkDestroyRenderPass(ctx.device, ctx.render_pass, nullptr);
+
+    // Window :
+
+    vkDestroyCommandPool(ctx.device, ctx.command_pool, nullptr);
+    vkDestroySwapchainKHR(ctx.device, ctx.swapchain, nullptr);
+    vkDestroySurfaceKHR(ctx.instance, ctx.surface, nullptr);
+
+    XDestroyWindow(ctx.wm.display, ctx.wm.window);
+    XCloseDisplay(ctx.wm.display);
+
+    // Vulkan :
     
     vkDestroyDevice(ctx.device, nullptr);
     vkDestroyInstance(ctx.instance, nullptr);
@@ -970,10 +1022,14 @@ int main(int argc, char** argv) {
         }
 
         // Make sure we're not rendering to an image that is being used by another in-flight frame
-        if (ctx.swapchain_image_in_flight[image_index] != VK_NULL_HANDLE) {
-            vkWaitForFences(ctx.device, 1, &ctx.swapchain_image_in_flight[image_index], VK_TRUE, UINT64_MAX);
+        if (ctx.swapchain_frames[image_index] >= 0) {
+            vkWaitForFences(ctx.device,
+                            1,
+                            &ctx.in_flight_fences[ctx.swapchain_frames[image_index]],
+                            VK_TRUE,
+                            UINT64_MAX);
         }
-        ctx.swapchain_image_in_flight[image_index] = ctx.in_flight_fences[current_frame];
+        ctx.swapchain_frames[image_index] = current_frame;
 
         record_command_buffer(ctx, ctx.command_buffers[image_index], image_index, models, cam);
         
@@ -1011,5 +1067,5 @@ int main(int argc, char** argv) {
 
     destroy_mesh(ctx, plane);
 
-    // vk_finalize(ctx);
+    vk_finalize(ctx);
 }
