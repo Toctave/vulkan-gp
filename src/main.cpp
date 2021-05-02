@@ -48,7 +48,7 @@ struct GraphicsContext {
     VkSurfaceFormatKHR swapchain_format;
     std::vector<VkImage> swapchain_images;
     std::vector<VkImageView> swapchain_image_views;
-    std::vector<int32_t> swapchain_frames;
+    std::vector<int64_t> swapchain_frames;
 
     GPUImage depth_image;
     std::vector<VkFramebuffer> framebuffers;
@@ -455,19 +455,6 @@ static void create_swapchain(GraphicsContext& ctx) {
         }
     }
 
-    VkSemaphoreCreateInfo semaphore_ci{};
-    semaphore_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    VkFenceCreateInfo fence_ci{};
-    fence_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (vkCreateSemaphore(ctx.device, &semaphore_ci, nullptr, &ctx.swapchain_image_ready[i]) != VK_SUCCESS
-            || vkCreateSemaphore(ctx.device, &semaphore_ci, nullptr, &ctx.swapchain_submit_done[i]) != VK_SUCCESS
-            || vkCreateFence(ctx.device, &fence_ci, nullptr, &ctx.frame_finished_fences[i]) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create sync objects for frame.");
-        }
-    }
-
     ctx.command_buffers.resize(ctx.swapchain_images.size());
     
     VkCommandBufferAllocateInfo command_buffer_ai{};
@@ -527,7 +514,20 @@ static void window_init(GraphicsContext& ctx) {
         throw std::runtime_error("Could not create command pool.");
     }
 
-    create_swapchain(ctx);    
+    create_swapchain(ctx);
+
+    VkSemaphoreCreateInfo semaphore_ci{};
+    semaphore_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkFenceCreateInfo fence_ci{};
+    fence_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (vkCreateSemaphore(ctx.device, &semaphore_ci, nullptr, &ctx.swapchain_image_ready[i]) != VK_SUCCESS
+            || vkCreateSemaphore(ctx.device, &semaphore_ci, nullptr, &ctx.swapchain_submit_done[i]) != VK_SUCCESS
+            || vkCreateFence(ctx.device, &fence_ci, nullptr, &ctx.frame_finished_fences[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create sync objects for frame.");
+        }
+    }
 }
 
 static std::vector<uint32_t> load_spirv_file(const std::string& file_name) {
@@ -637,24 +637,22 @@ static void pipeline_init(GraphicsContext& ctx) {
     input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    VkViewport viewport;
-    viewport.x = 0.0f;
-    viewport.y = ctx.swapchain_extent.height;
-    viewport.width = ctx.swapchain_extent.width;
-    viewport.height = -static_cast<float>(ctx.swapchain_extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
+    // VkViewport viewport;
+    // viewport.x = 0.0f;
+    // viewport.y = ctx.swapchain_extent.height;
+    // viewport.width = ctx.swapchain_extent.width;
+    // viewport.height = -static_cast<float>(ctx.swapchain_extent.height);
+    // viewport.minDepth = 0.0f;
+    // viewport.maxDepth = 1.0f;
 
-    VkRect2D scissors;
-    scissors.offset = { 0, 0 };
-    scissors.extent = ctx.swapchain_extent;
+    // VkRect2D scissors;
+    // scissors.offset = { 0, 0 };
+    // scissors.extent = ctx.swapchain_extent;
 
     VkPipelineViewportStateCreateInfo viewport_state{};
     viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport_state.viewportCount = 1;
-    viewport_state.pViewports = &viewport;
     viewport_state.scissorCount = 1;
-    viewport_state.pScissors = &scissors;
 
     VkPipelineRasterizationStateCreateInfo rasterization{};
     rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -692,6 +690,16 @@ static void pipeline_init(GraphicsContext& ctx) {
     color_blend.pAttachments = &color_blend_attachment_state;
     color_blend.logicOpEnable = false;
 
+    std::vector<VkDynamicState> dynamic_states = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamic_state_ci{};
+    dynamic_state_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state_ci.dynamicStateCount = dynamic_states.size();
+    dynamic_state_ci.pDynamicStates = dynamic_states.data();
+
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
 
     std::vector<VkPushConstantRange> push_constants;
@@ -724,6 +732,7 @@ static void pipeline_init(GraphicsContext& ctx) {
     pipeline_ci.pMultisampleState = &multisample;
     pipeline_ci.pDepthStencilState = &depth_stencil;
     pipeline_ci.pColorBlendState = &color_blend;
+    pipeline_ci.pDynamicState = &dynamic_state_ci;
     pipeline_ci.layout = ctx.pipeline_layout;
     pipeline_ci.renderPass = ctx.render_pass;
 
@@ -913,6 +922,22 @@ static void record_command_buffer(const GraphicsContext& ctx, VkCommandBuffer co
     command_buffer_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		
     vkBeginCommandBuffer(command_buffer, &command_buffer_bi);
+
+    VkViewport viewport;
+    viewport.x = 0.0f;
+    viewport.y = ctx.swapchain_extent.height;
+    viewport.width = ctx.swapchain_extent.width;
+    viewport.height = -static_cast<float>(ctx.swapchain_extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissors;
+    scissors.offset = { 0, 0 };
+    scissors.extent = ctx.swapchain_extent;
+    
+    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+    vkCmdSetScissor(command_buffer, 0, 1, &scissors);
+    
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline);
 
     VkClearValue color_clear_value{};
@@ -953,12 +978,6 @@ static void record_command_buffer(const GraphicsContext& ctx, VkCommandBuffer co
 static void destroy_swapchain(GraphicsContext& ctx) {
     vkDestroyRenderPass(ctx.device, ctx.render_pass, nullptr);
     
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyFence(ctx.device, ctx.frame_finished_fences[i], nullptr);
-        vkDestroySemaphore(ctx.device, ctx.swapchain_image_ready[i], nullptr);
-        vkDestroySemaphore(ctx.device, ctx.swapchain_submit_done[i], nullptr);
-    }
-
     for (size_t i = 0; i < ctx.swapchain_images.size(); i++) {
         vkDestroyFramebuffer(ctx.device, ctx.framebuffers[i], nullptr);
         vkDestroyImageView(ctx.device, ctx.swapchain_image_views[i], nullptr);
@@ -986,6 +1005,12 @@ void vk_finalize(GraphicsContext& ctx) {
     // Window :
     destroy_swapchain(ctx);
     
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyFence(ctx.device, ctx.frame_finished_fences[i], nullptr);
+        vkDestroySemaphore(ctx.device, ctx.swapchain_image_ready[i], nullptr);
+        vkDestroySemaphore(ctx.device, ctx.swapchain_submit_done[i], nullptr);
+    }
+    
     vkDestroyCommandPool(ctx.device, ctx.command_pool, nullptr);
     vkDestroySurfaceKHR(ctx.instance, ctx.surface, nullptr);
 
@@ -1012,12 +1037,9 @@ static void print_fence_states(const GraphicsContext& ctx) {
 }
 
 static void recreate_swapchain(GraphicsContext& ctx) {
-    std::cout << "Waiting on all fences before destroying swapchain\n";
-    print_fence_states(ctx);
     vkWaitForFences(ctx.device, MAX_FRAMES_IN_FLIGHT, ctx.frame_finished_fences, VK_TRUE, UINT64_MAX);
     destroy_swapchain(ctx);
     create_swapchain(ctx);
-    std::cerr << "Recreated swapchain\n";
 }
 
 int main(int argc, char** argv) {
@@ -1073,7 +1095,6 @@ int main(int argc, char** argv) {
     VkQueue queue;
     vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &queue);
 
-    uint32_t frames = 0;
     uint32_t current_frame = 0;
     bool should_close = false;
 
@@ -1096,8 +1117,6 @@ int main(int argc, char** argv) {
             }
         }
 
-        frames++;
-        std::cout << "-- FRAME " << frames << " --\n";
         auto t1 = std::chrono::system_clock::now();
         std::chrono::duration<float> elapsed_duration = t1 - t0;
         float elapsed = elapsed_duration.count();
@@ -1107,21 +1126,21 @@ int main(int argc, char** argv) {
             * glm::rotate(elapsed * 6.0f, glm::vec3(0, 0, 1))
             * glm::rotate(glm::radians(90.0f), glm::vec3(0, 1, 0));
 
+        uint32_t current_frame_in_flight = current_frame % MAX_FRAMES_IN_FLIGHT;
+        
         // Wait until the current frame is done rendering.
-        std::cout << "Waiting until frame #" << current_frame << " is rendered.\n";
-        vkWaitForFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame], VK_TRUE, UINT64_MAX);
-        std::cout << "Done waiting.\n";
+        vkWaitForFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight], VK_TRUE, UINT64_MAX);
 
         uint32_t image_index;
         VkResult acquire_result; 
         do {
-            std::cout << "Acquiring an image.\n";
             acquire_result = vkAcquireNextImageKHR(ctx.device,
                                                    ctx.swapchain,
                                                    0,
-                                                   ctx.swapchain_image_ready[current_frame],
+                                                   ctx.swapchain_image_ready[current_frame_in_flight],
                                                    VK_NULL_HANDLE,
                                                    &image_index);
+            
             switch (acquire_result) {
             case VK_SUCCESS:
                 break;
@@ -1133,26 +1152,21 @@ int main(int argc, char** argv) {
                 break;
             case VK_ERROR_OUT_OF_DATE_KHR:
                 recreate_swapchain(ctx);
+                cam.aspect = static_cast<float>(ctx.swapchain_extent.width) / static_cast<float>(ctx.swapchain_extent.height);
                 break;
             default:
                 throw std::runtime_error("Unexpected error when acquiring swapchain image.");
                 break;
             }
         } while (acquire_result != VK_SUCCESS);
-        std::cout << "Rendering to image #" << image_index << "\n";
 
         // Make sure we're not rendering to an image that is being used by another in-flight frame
         if (ctx.swapchain_frames[image_index] >= 0) {
-            std::cout << "Image #" << image_index
-                      << " in use by frame #" << ctx.swapchain_frames[image_index]
-                      << " (" << ctx.frame_finished_fences[ctx.swapchain_frames[image_index]] << ")"
-                      << ", waiting.\n";
             vkWaitForFences(ctx.device,
                             1,
-                            &ctx.frame_finished_fences[ctx.swapchain_frames[image_index]],
+                            &ctx.frame_finished_fences[ctx.swapchain_frames[image_index] % MAX_FRAMES_IN_FLIGHT],
                             VK_TRUE,
                             UINT64_MAX);
-            std::cout << "Done waiting.\n";
         }
         ctx.swapchain_frames[image_index] = current_frame;
 
@@ -1165,16 +1179,15 @@ int main(int argc, char** argv) {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &ctx.command_buffers[image_index];
         submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &ctx.swapchain_image_ready[current_frame];
+        submit_info.pWaitSemaphores = &ctx.swapchain_image_ready[current_frame_in_flight];
         submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
         submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &ctx.swapchain_submit_done[current_frame];
+        submit_info.pSignalSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
 
-        vkResetFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame]);
-        if (vkQueueSubmit(queue, 1, &submit_info, ctx.frame_finished_fences[current_frame]) != VK_SUCCESS) {
+        vkResetFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight]);
+        if (vkQueueSubmit(queue, 1, &submit_info, ctx.frame_finished_fences[current_frame_in_flight]) != VK_SUCCESS) {
             throw std::runtime_error("Could not submit commands.");
         }
-        std::cout << "Submitted queue, going to signal fence #" << current_frame << " (" << ctx.frame_finished_fences[current_frame] << ")" << "\n";
 
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1182,7 +1195,7 @@ int main(int argc, char** argv) {
         present_info.pSwapchains = &ctx.swapchain;
         present_info.pImageIndices = &image_index;
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &ctx.swapchain_submit_done[current_frame];
+        present_info.pWaitSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
 
         VkResult present_result = vkQueuePresentKHR(queue, &present_info);
         switch (present_result) {
@@ -1198,14 +1211,14 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Unknown error when presenting.");
         }
 
-        current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+        current_frame++;
     }
 
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<float> elapsed_duration = t1 - t0;
     float elapsed = elapsed_duration.count();
 
-    float avg_fps = frames / elapsed;
+    float avg_fps = current_frame / elapsed;
     std::cout << "Average FPS : " << avg_fps << "\n";
 
     vkDeviceWaitIdle(ctx.device);
