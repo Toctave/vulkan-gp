@@ -63,6 +63,13 @@ struct GraphicsContext {
     WMContext wm;
 };
 
+uint64_t now() {
+    static auto t0 = std::chrono::high_resolution_clock::now();
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return std::chrono::duration<uint64_t, std::nano>(t1 - t0).count();
+}
+
 static void vk_init(GraphicsContext& ctx) {
     uint32_t layer_count;
     vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
@@ -404,6 +411,7 @@ static void create_swapchain(GraphicsContext& ctx) {
     swapchain_ci.clipped = VK_TRUE;
     swapchain_ci.oldSwapchain = VK_NULL_HANDLE;
 
+    // Todo : make this call faster, probablyn using oldSwapchain
     if (vkCreateSwapchainKHR(ctx.device, &swapchain_ci, nullptr, &ctx.swapchain) != VK_SUCCESS) {
         throw std::runtime_error("Could not create swapchain.");
     }
@@ -468,7 +476,13 @@ static void create_swapchain(GraphicsContext& ctx) {
 
 static void window_init(GraphicsContext& ctx) {
     ctx.wm.display = XOpenDisplay(nullptr);
-    ctx.wm.window = XCreateSimpleWindow(ctx.wm.display, XDefaultRootWindow(ctx.wm.display), 0, 0, 1920, 1080, 0, 0, XBlackPixel(ctx.wm.display, XDefaultScreen(ctx.wm.display)));
+    ctx.wm.window = XCreateSimpleWindow(ctx.wm.display,
+                                        XDefaultRootWindow(ctx.wm.display),
+                                        0, 0,
+                                        1920, 1080,
+                                        0, 0,
+                                        XBlackPixel(ctx.wm.display, XDefaultScreen(ctx.wm.display)));
+    XStoreName(ctx.wm.display, ctx.wm.window, "Vulkan-gp");
 
     Atom protocol = XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", false);
     XSetWMProtocols(ctx.wm.display, ctx.wm.window, &protocol, 1);
@@ -1042,12 +1056,100 @@ static void recreate_swapchain(GraphicsContext& ctx) {
     create_swapchain(ctx);
 }
 
+static void render_frame(GraphicsContext& ctx, uint32_t frame, const std::vector<Model>& models, Camera& cam) {
+    VkQueue queue;
+    vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &queue);
+    
+    uint32_t current_frame_in_flight = frame % MAX_FRAMES_IN_FLIGHT;
+        
+    // Wait until the current frame is done rendering.
+    vkWaitForFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight], VK_TRUE, UINT64_MAX);
+
+    uint32_t image_index;
+    VkResult acquire_result; 
+    do {
+        acquire_result = vkAcquireNextImageKHR(ctx.device,
+                                               ctx.swapchain,
+                                               0,
+                                               ctx.swapchain_image_ready[current_frame_in_flight],
+                                               VK_NULL_HANDLE,
+                                               &image_index);
+            
+        switch (acquire_result) {
+        case VK_SUCCESS:
+            break;
+        case VK_NOT_READY:
+            throw std::runtime_error("No swapchain image ready.");
+            break;
+        case VK_SUBOPTIMAL_KHR:
+            std::cerr << "Warning : suboptimal swapchain\n";
+            break;
+        case VK_ERROR_OUT_OF_DATE_KHR:
+            recreate_swapchain(ctx);
+            cam.aspect = static_cast<float>(ctx.swapchain_extent.width) / static_cast<float>(ctx.swapchain_extent.height);
+            break;
+        default:
+            throw std::runtime_error("Unexpected error when acquiring swapchain image.");
+            break;
+        }
+    } while (acquire_result != VK_SUCCESS);
+
+    // Make sure we're not rendering to an image that is being used by another in-flight frame
+    if (ctx.swapchain_frames[image_index] >= 0) {
+        vkWaitForFences(ctx.device,
+                        1,
+                        &ctx.frame_finished_fences[ctx.swapchain_frames[image_index] % MAX_FRAMES_IN_FLIGHT],
+                        VK_TRUE,
+                        UINT64_MAX);
+    }
+    ctx.swapchain_frames[image_index] = frame;
+
+    record_command_buffer(ctx, ctx.command_buffers[image_index], image_index, models, cam);
+        
+    VkPipelineStageFlags submit_wait_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &ctx.command_buffers[image_index];
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &ctx.swapchain_image_ready[current_frame_in_flight];
+    submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
+
+    vkResetFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight]);
+    if (vkQueueSubmit(queue, 1, &submit_info, ctx.frame_finished_fences[current_frame_in_flight]) != VK_SUCCESS) {
+        throw std::runtime_error("Could not submit commands.");
+    }
+
+    VkPresentInfoKHR present_info{};
+    present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    present_info.swapchainCount = 1;
+    present_info.pSwapchains = &ctx.swapchain;
+    present_info.pImageIndices = &image_index;
+    present_info.waitSemaphoreCount = 1;
+    present_info.pWaitSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
+
+    VkResult present_result = vkQueuePresentKHR(queue, &present_info);
+    switch (present_result) {
+    case VK_SUCCESS:
+        break;
+    case VK_SUBOPTIMAL_KHR:
+        std::cerr << "Warning : suboptimal swapchain.\n";
+        break;
+    case VK_ERROR_OUT_OF_DATE_KHR:
+        std::cerr << "Warning : swapchain out of date. Did not render frame.\n";
+        break;
+    default:
+        throw std::runtime_error("Unknown error when presenting.");
+    }
+}
+
 int main(int argc, char** argv) {
     GraphicsContext ctx;
     vk_init(ctx);
-
     window_init(ctx);
-
     pipeline_init(ctx);
 
     std::vector<glm::vec3> vertex_positions = {
@@ -1092,15 +1194,12 @@ int main(int argc, char** argv) {
     cam.near = 0.01f;
     cam.far = 100.0f;
 
-    VkQueue queue;
-    vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &queue);
-
     uint32_t current_frame = 0;
     bool should_close = false;
 
-    auto t0 = std::chrono::system_clock::now();
+    uint64_t t0 = now();
 
-    while (!should_close) {
+    while (true) {
         while (XPending(ctx.wm.display)) {
             XEvent event;
             XNextEvent(ctx.wm.display, &event);
@@ -1116,108 +1215,25 @@ int main(int argc, char** argv) {
                 std::cerr << "Unhandled event type " << event.type << "\n";
             }
         }
+        if (should_close) {
+            break;
+        }
 
-        auto t1 = std::chrono::system_clock::now();
-        std::chrono::duration<float> elapsed_duration = t1 - t0;
-        float elapsed = elapsed_duration.count();
+        uint64_t t1 = now();
+        float elapsed = (t1 - t0) / (1000.0f * 1000.0f * 1000.0f);
+        float freq = .5f;
 
         models[0].transform =
             glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
-            * glm::rotate(elapsed * 6.0f, glm::vec3(0, 0, 1))
+            * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
             * glm::rotate(glm::radians(90.0f), glm::vec3(0, 1, 0));
 
-        uint32_t current_frame_in_flight = current_frame % MAX_FRAMES_IN_FLIGHT;
-        
-        // Wait until the current frame is done rendering.
-        vkWaitForFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight], VK_TRUE, UINT64_MAX);
-
-        uint32_t image_index;
-        VkResult acquire_result; 
-        do {
-            acquire_result = vkAcquireNextImageKHR(ctx.device,
-                                                   ctx.swapchain,
-                                                   0,
-                                                   ctx.swapchain_image_ready[current_frame_in_flight],
-                                                   VK_NULL_HANDLE,
-                                                   &image_index);
-            
-            switch (acquire_result) {
-            case VK_SUCCESS:
-                break;
-            case VK_NOT_READY:
-                throw std::runtime_error("No swapchain image ready.");
-                break;
-            case VK_SUBOPTIMAL_KHR:
-                std::cerr << "Warning : suboptimal swapchain\n";
-                break;
-            case VK_ERROR_OUT_OF_DATE_KHR:
-                recreate_swapchain(ctx);
-                cam.aspect = static_cast<float>(ctx.swapchain_extent.width) / static_cast<float>(ctx.swapchain_extent.height);
-                break;
-            default:
-                throw std::runtime_error("Unexpected error when acquiring swapchain image.");
-                break;
-            }
-        } while (acquire_result != VK_SUCCESS);
-
-        // Make sure we're not rendering to an image that is being used by another in-flight frame
-        if (ctx.swapchain_frames[image_index] >= 0) {
-            vkWaitForFences(ctx.device,
-                            1,
-                            &ctx.frame_finished_fences[ctx.swapchain_frames[image_index] % MAX_FRAMES_IN_FLIGHT],
-                            VK_TRUE,
-                            UINT64_MAX);
-        }
-        ctx.swapchain_frames[image_index] = current_frame;
-
-        record_command_buffer(ctx, ctx.command_buffers[image_index], image_index, models, cam);
-        
-        VkPipelineStageFlags submit_wait_stage_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &ctx.command_buffers[image_index];
-        submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &ctx.swapchain_image_ready[current_frame_in_flight];
-        submit_info.pWaitDstStageMask = &submit_wait_stage_mask;
-        submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
-
-        vkResetFences(ctx.device, 1, &ctx.frame_finished_fences[current_frame_in_flight]);
-        if (vkQueueSubmit(queue, 1, &submit_info, ctx.frame_finished_fences[current_frame_in_flight]) != VK_SUCCESS) {
-            throw std::runtime_error("Could not submit commands.");
-        }
-
-        VkPresentInfoKHR present_info{};
-        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.swapchainCount = 1;
-        present_info.pSwapchains = &ctx.swapchain;
-        present_info.pImageIndices = &image_index;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
-
-        VkResult present_result = vkQueuePresentKHR(queue, &present_info);
-        switch (present_result) {
-        case VK_SUCCESS:
-            break;
-        case VK_SUBOPTIMAL_KHR:
-            std::cerr << "Warning : suboptimal swapchain.\n";
-            break;
-        case VK_ERROR_OUT_OF_DATE_KHR:
-            std::cerr << "Warning : swapchain out of date. Did not render frame.\n";
-            break;
-        default:
-            throw std::runtime_error("Unknown error when presenting.");
-        }
-
+        render_frame(ctx, current_frame, models, cam);
         current_frame++;
     }
 
-    auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<float> elapsed_duration = t1 - t0;
-    float elapsed = elapsed_duration.count();
-
+    uint64_t t1 = now();
+    float elapsed = (t1 - t0) / (1000.0f * 1000.0f * 1000.0f);
     float avg_fps = current_frame / elapsed;
     std::cout << "Average FPS : " << avg_fps << "\n";
 
