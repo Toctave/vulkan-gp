@@ -76,6 +76,14 @@ uint64_t now() {
     return std::chrono::duration<uint64_t, std::nano>(t1 - t0).count();
 }
 
+double now_ms() {
+    return now() / (1000.0 * 1000.0);
+}
+
+double now_seconds() {
+    return now_ms() / 1000.0;
+}
+
 static void vk_init(GraphicsContext& ctx) {
     uint32_t layer_count;
     vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
@@ -1177,7 +1185,7 @@ int main(int argc, char** argv) {
     uint32_t current_frame = 0;
     bool should_close = false;
 
-    uint64_t t0 = now();
+    double t0 = now_seconds();
 
     while (true) {
         while (XPending(ctx.wm.display)) {
@@ -1199,8 +1207,8 @@ int main(int argc, char** argv) {
             break;
         }
 
-        uint64_t t1 = now();
-        float elapsed = (t1 - t0) / (1000.0f * 1000.0f * 1000.0f);
+        double t1 = now_seconds();
+        float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
         models[0].transform =
@@ -1212,8 +1220,8 @@ int main(int argc, char** argv) {
         current_frame++;
     }
 
-    uint64_t t1 = now();
-    float elapsed = (t1 - t0) / (1000.0f * 1000.0f * 1000.0f);
+    double t1 = now_seconds();
+    float elapsed = static_cast<float>(t1 - t0);
     float avg_fps = current_frame / elapsed;
     std::cout << "Average FPS : " << avg_fps << "\n";
 
