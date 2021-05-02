@@ -1029,20 +1029,6 @@ void vk_finalize(GraphicsContext& ctx) {
     vkDestroyInstance(ctx.instance, nullptr);
 }
 
-static void print_fence_states(const GraphicsContext& ctx) {
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        VkResult result = vkGetFenceStatus(ctx.device, ctx.frame_finished[i]);
-        std::cout << "Frame #" << i
-                  << " (" << ctx.frame_finished[i] 
-                  << ") is ";
-        if (result == VK_SUCCESS) {
-            std::cout << "available\n";
-        } else {
-            std::cout << "unavailable\n";
-        }
-    }
-}
-
 static void recreate_swapchain(GraphicsContext& ctx) {
     vkWaitForFences(ctx.device, MAX_FRAMES_IN_FLIGHT, ctx.frame_finished, VK_TRUE, UINT64_MAX);
     Swapchain new_swapchain = create_swapchain(ctx.device, ctx.physical_device, ctx.surface, ctx.swapchain.handle);
