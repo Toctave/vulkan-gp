@@ -18,6 +18,12 @@
 
 #define MAX_FRAMES_IN_FLIGHT 3
 
+enum MouseButtonMask {
+    MOUSE_LEFT = 0x01,
+    MOUSE_MIDDLE = 0x02,
+    MOUSE_RIGHT = 0x04
+};
+
 static const glm::vec3 GLOBAL_UP(0, 0, 1);
 
 struct WMContext {
@@ -337,11 +343,11 @@ static Swapchain create_swapchain(VkDevice device,
     
     const VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
     swapchain.depth_image = allocate_image(device,
-                                     physical_device,
-                                     depth_format,
-                                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                     swapchain.extent.width,
-                                     swapchain.extent.height);
+                                           physical_device,
+                                           depth_format,
+                                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                           swapchain.extent.width,
+                                           swapchain.extent.height);
     
     VkAttachmentReference color_attachment_ref{};
     color_attachment_ref.attachment = 0;
@@ -504,9 +510,17 @@ static void window_init(GraphicsContext& ctx) {
     ctx.wm.window = XCreateSimpleWindow(ctx.wm.display,
                                         XDefaultRootWindow(ctx.wm.display),
                                         0, 0,
-                                        1920, 1080,
+                                        640, 480,
                                         0, 0,
                                         XBlackPixel(ctx.wm.display, XDefaultScreen(ctx.wm.display)));
+    XSelectInput(ctx.wm.display,
+                 ctx.wm.window,
+                 ButtonPressMask
+                 | ButtonReleaseMask
+                 | KeyPressMask
+                 | KeyReleaseMask
+                 | PointerMotionMask);
+    
     XStoreName(ctx.wm.display, ctx.wm.window, "Vulkan-gp");
 
     Atom protocol = XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", false);
@@ -681,7 +695,7 @@ static void pipeline_init(GraphicsContext& ctx) {
     rasterization.depthClampEnable = false;
     rasterization.rasterizerDiscardEnable = false;
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterization.cullMode = VK_CULL_MODE_NONE;
     rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
 
@@ -1134,6 +1148,14 @@ static void render_frame(GraphicsContext& ctx, uint32_t frame, const std::vector
     }
 }
 
+static void update_orbit_camera(Camera& cam, float lat, float lng, float r, glm::vec3 center) {
+    cam.target = center;
+    cam.eye = center
+        + r * glm::vec3(std::cos(lat) * std::sin(lng),
+                        std::cos(lat) * std::cos(lng),
+                        std::sin(lat));
+}
+
 int main(int argc, char** argv) {
     GraphicsContext ctx;
     vk_init(ctx);
@@ -1153,7 +1175,7 @@ int main(int argc, char** argv) {
         {1, 1},
         {0, 1},
     };
-
+    
     assert(vertex_uvs.size() == vertex_positions.size());
 
     std::vector<uint32_t> vertex_indices = {
@@ -1168,25 +1190,38 @@ int main(int argc, char** argv) {
                              vertex_indices.data(),
                              vertex_positions.data(),
                              vertex_uvs.data());
-
+    
     std::vector<Model> models = {
         {&plane, glm::translate(glm::vec3(0, 0, 0))},
         {&plane, glm::translate(glm::vec3(0, 0, 1))},
     };
-
+    
+    float orbit_speed = 2.0f;
+    float zoom_speed = .1f;
+    float cam_lat = 0.0f;
+    float cam_long = 0.0f;
+    float cam_r = 3.0f;
+    glm::vec3 cam_center(0.0f, 0.0f, 0.0f);
+    
     Camera cam;
     cam.aspect = static_cast<float>(ctx.swapchain.extent.width) / static_cast<float>(ctx.swapchain.extent.height);
-    cam.eye = glm::vec3(0, -2, 2);
-    cam.target = glm::vec3(0, 0, 0);
+    update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
     cam.fov = glm::radians(60.0f);
     cam.near = 0.01f;
     cam.far = 100.0f;
 
+    
     uint32_t current_frame = 0;
     bool should_close = false;
 
     double t0 = now_seconds();
+    
+    uint32_t mouse_button_down = 0;
 
+    glm::vec2 mouse_position;
+    glm::vec2 drag_start;
+
+    
     while (true) {
         while (XPending(ctx.wm.display)) {
             XEvent event;
@@ -1194,10 +1229,62 @@ int main(int argc, char** argv) {
 
             switch (event.type) {
             case ClientMessage:
-                if (event.xclient.message_type == XInternAtom(ctx.wm.display, "WM_PROTOCOLS", true)
-                    && event.xclient.data.l[0] == XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", true)) {
+                if (event.xclient.message_type ==
+                    XInternAtom(ctx.wm.display, "WM_PROTOCOLS", true) &&
+                    event.xclient.data.l[0] ==
+                    XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", true)) {
                     should_close = true;
                 }
+                break;
+            case MotionNotify: {
+                mouse_position.x = 2.0f * event.xmotion.x / ctx.swapchain.extent.width - 1.0f;
+                mouse_position.y = 1.0f - 2.0f * event.xmotion.y / ctx.swapchain.extent.height;
+
+                if (mouse_button_down & MOUSE_MIDDLE) {
+                    glm::vec2 drag = mouse_position - drag_start;
+                    cam_long += drag.x * orbit_speed;
+                    cam_lat -= drag.y * orbit_speed;
+                    drag_start = mouse_position;
+                }
+
+                break;
+            }
+            case ButtonPress:
+                switch (event.xbutton.button) {
+                case Button1:
+                    mouse_button_down |= MOUSE_LEFT;
+                    break;
+                case Button2:
+                    mouse_button_down |= MOUSE_MIDDLE;
+                    drag_start = mouse_position;
+                    break;
+                case Button3:
+                    mouse_button_down |= MOUSE_RIGHT;
+                    break;
+                case Button4:
+                    cam_r /= 1.0f + zoom_speed;
+                    break;
+                case Button5:
+                    cam_r *= 1.0f + zoom_speed;
+                    break;
+                }
+                break;
+            case ButtonRelease:
+                switch (event.xbutton.button) {
+                case Button1:
+                    mouse_button_down &= ~MOUSE_LEFT;
+                    break;
+                case Button2:
+                    mouse_button_down &= ~MOUSE_MIDDLE;
+                    break;
+                case Button3:
+                    mouse_button_down &= ~MOUSE_RIGHT;
+                    break;
+                }
+                break;
+            case KeyPress:
+                break;
+            case KeyRelease:
                 break;
             default:
                 std::cerr << "Unhandled event type " << event.type << "\n";
@@ -1216,6 +1303,7 @@ int main(int argc, char** argv) {
             * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
             * glm::rotate(glm::radians(90.0f), glm::vec3(0, 1, 0));
 
+        update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
         render_frame(ctx, current_frame, models, cam);
         current_frame++;
     }
