@@ -14,8 +14,6 @@
 #include <glm/gtx/transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include "Mesh.hpp"
-
 #define MAX_FRAMES_IN_FLIGHT 3
 
 enum MouseButtonMask {
