@@ -13,8 +13,18 @@ target_link_libraries(${PROJECT_NAME} Vulkan::Vulkan)
 
 target_sources(${PROJECT_NAME} PRIVATE
   src/main.cpp
+  src/render.cpp
   shaders/triangle.vert.spv
   shaders/triangle.frag.spv
+  )
+
+target_sources(${PROJECT_NAME} PRIVATE
+  src/platform_vulkan.cpp
+  src/render_vulkan.cpp
+  )
+
+target_sources(${PROJECT_NAME} PRIVATE
+  src/platform_x11.cpp
   )
   
 # GLM
