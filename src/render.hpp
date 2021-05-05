@@ -31,6 +31,8 @@ Mesh create_mesh(const GraphicsContext& ctx,
                  uint32_t* indices,
                  glm::vec3* positions,
                  glm::vec2* uvs);
+Mesh load_obj_mesh(const GraphicsContext& ctx,
+                   const std::string& filename);
 void destroy_mesh(const GraphicsContext& ctx, Mesh& mesh);
 
 GraphicsFrame begin_frame(GraphicsContext& ctx);

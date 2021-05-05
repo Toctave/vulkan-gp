@@ -617,7 +617,7 @@ static void pipeline_init(GraphicsContext& ctx) {
     rasterization.depthClampEnable = false;
     rasterization.rasterizerDiscardEnable = false;
     rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_NONE;
+    rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.lineWidth = 1.0f;
 

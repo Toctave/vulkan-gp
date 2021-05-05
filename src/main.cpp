@@ -51,10 +51,10 @@ int main(int argc, char** argv) {
     graphics_init(ctx);
 
     std::vector<glm::vec3> vertex_positions = {
-        {-.5f, -.5f, 0}, 
-        {.5f, -.5f, 0},           
-        {.5f, .5f, 0},            
-        {-.5f, .5f, 0},           
+        {-.5f, -.5f, 0},
+        {.5f, -.5f, 0},
+        {.5f, .5f, 0},     
+        {-.5f, .5f, 0},
     };
 
     std::vector<glm::vec2> vertex_uvs = {
@@ -79,8 +79,10 @@ int main(int argc, char** argv) {
                              vertex_positions.data(),
                              vertex_uvs.data());
     
+    Mesh suzanne = load_obj_mesh(ctx, "suzanne.obj");
+    
     std::vector<Model> models = {
-        {&plane, glm::translate(glm::vec3(0, 0, 0))},
+        {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
         {&plane, glm::translate(glm::vec3(0, 0, 1))},
     };
     
@@ -149,10 +151,10 @@ int main(int argc, char** argv) {
                 case Button3:
                     mouse_button_down |= MOUSE_RIGHT;
                     break;
-                case Button4:
+                case Button4: // Scroll up
                     cam_r /= 1.0f + zoom_speed;
                     break;
-                case Button5:
+                case Button5: // Scroll down
                     cam_r *= 1.0f + zoom_speed;
                     break;
                 }
@@ -186,10 +188,9 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
-        models[0].transform =
-            glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
-            * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
-            * glm::rotate(glm::radians(90.0f), glm::vec3(0, 1, 0));
+        models[0].transform = glm::scale(glm::vec3(.5f))
+            * glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
+            * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1));
 
         update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
         
@@ -197,7 +198,9 @@ int main(int argc, char** argv) {
         GraphicsFrame frame = begin_frame(ctx);
 
         cam.aspect = static_cast<float>(ctx.swapchain.extent.width) / static_cast<float>(ctx.swapchain.extent.height);
-        draw_model(frame, camera_viewproj(cam), models[0]);
+        for (const Model &model : models) {
+            draw_model(frame, camera_viewproj(cam), model);
+        }
 
         end_frame(ctx, frame);
         
@@ -212,6 +215,7 @@ int main(int argc, char** argv) {
     graphics_wait_idle(ctx);
 
     destroy_mesh(ctx, plane);
+    destroy_mesh(ctx, suzanne);
 
     graphics_finalize(ctx);
 }
