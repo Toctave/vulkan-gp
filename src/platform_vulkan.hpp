@@ -3,6 +3,7 @@
 #include "platform_wm.hpp"
 
 #include <vulkan/vulkan.h>
+#include <glm/glm.hpp>
 
 #include <vector>
 #include <stdexcept>
@@ -66,6 +67,11 @@ struct VulkanFrame {
     VkPipelineLayout pipeline_layout;
     uint32_t frame_index;
     uint32_t image_index;
+};
+
+struct PushMatrices {
+    glm::mat4 mvp;
+    glm::mat4 model_view;
 };
 
 int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,

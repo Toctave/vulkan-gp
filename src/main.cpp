@@ -22,19 +22,17 @@ enum MouseButtonMask {
 
 static const glm::vec3 GLOBAL_UP(0, 0, 1);
 
-glm::mat4 camera_viewproj(const Camera& cam) {
-    glm::mat4 view = glm::lookAt(
-                                 cam.eye,
-                                 cam.target,
-                                 GLOBAL_UP);
+glm::mat4 camera_view(const Camera& cam) {
+    return  glm::lookAt(cam.eye,
+                        cam.target,
+                        GLOBAL_UP);
+}
 
-    glm::mat4 proj = glm::perspective(
-                                      cam.fov,
-                                      cam.aspect,
-                                      cam.near,
-                                      cam.far);
-
-    return proj * view;
+glm::mat4 camera_proj(const Camera& cam) {
+    return glm::perspective(cam.fov,
+                            cam.aspect,
+                            cam.near,
+                            cam.far);
 }
 
 static void update_orbit_camera(Camera& cam, float lat, float lng, float r, glm::vec3 center) {
@@ -64,6 +62,13 @@ int main(int argc, char** argv) {
         {0, 1},
     };
     
+    std::vector<glm::vec3> vertex_normals = {
+        {0, 0, 1},
+        {0, 0, 1},
+        {0, 0, 1},
+        {0, 0, 1},
+    };
+
     assert(vertex_uvs.size() == vertex_positions.size());
 
     std::vector<uint32_t> vertex_indices = {
@@ -77,9 +82,10 @@ int main(int argc, char** argv) {
                              vertex_indices.size() / 3,
                              vertex_indices.data(),
                              vertex_positions.data(),
-                             vertex_uvs.data());
+                             vertex_uvs.data(),
+                             vertex_normals.data());
     
-    Mesh suzanne = load_obj_mesh(ctx, "suzanne.obj");
+    Mesh suzanne = load_obj_mesh(ctx, "suzanne_smooth.obj");
     
     std::vector<Model> models = {
         {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
@@ -194,12 +200,11 @@ int main(int argc, char** argv) {
 
         update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
         
-        // render_frame(ctx, current_frame, models, cam);
         GraphicsFrame frame = begin_frame(ctx);
 
         cam.aspect = static_cast<float>(ctx.swapchain.extent.width) / static_cast<float>(ctx.swapchain.extent.height);
         for (const Model &model : models) {
-            draw_model(frame, camera_viewproj(cam), model);
+            draw_model(frame, camera_view(cam), camera_proj(cam), model);
         }
 
         end_frame(ctx, frame);

@@ -579,6 +579,13 @@ static void pipeline_init(GraphicsContext& ctx) {
             VK_FORMAT_R32G32_SFLOAT, // format
             0,                       // offset
         },
+        {
+            // Normal :
+            2,                          // location
+            2,                          // binding
+            VK_FORMAT_R32G32B32_SFLOAT, // format
+            0,                          // offset
+        },
     };
 
     std::vector<VkVertexInputBindingDescription> vertex_bindings = {
@@ -592,6 +599,12 @@ static void pipeline_init(GraphicsContext& ctx) {
             // UV :
             1,                           // binding
             sizeof(float) * 2,           // stride
+            VK_VERTEX_INPUT_RATE_VERTEX, // input rate
+        },
+        {
+            // Normal :
+            2,                           // binding
+            sizeof(float) * 3,           // stride
             VK_VERTEX_INPUT_RATE_VERTEX, // input rate
         },
     };
@@ -661,12 +674,12 @@ static void pipeline_init(GraphicsContext& ctx) {
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
 
     std::vector<VkPushConstantRange> push_constants;
-    VkPushConstantRange push_mvp;
-    push_mvp.offset = 0;
-    push_mvp.size = sizeof(float) * 4 * 4;
-    push_mvp.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkPushConstantRange push_matrices;
+    push_matrices.offset = 0;
+    push_matrices.size = sizeof(PushMatrices);
+    push_matrices.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     
-    push_constants.push_back(push_mvp);
+    push_constants.push_back(push_matrices);
 
     VkPipelineLayoutCreateInfo layout_ci{};
     layout_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

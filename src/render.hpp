@@ -6,6 +6,7 @@
 struct Mesh {
     GPUBuffer<glm::vec3> pos_buffer;
     GPUBuffer<glm::vec2> uv_buffer;
+    GPUBuffer<glm::vec3> normal_buffer;
     GPUBuffer<uint32_t> index_buffer;
     size_t vertex_count;
     size_t triangle_count;
@@ -30,7 +31,8 @@ Mesh create_mesh(const GraphicsContext& ctx,
                  size_t triangle_count,
                  uint32_t* indices,
                  glm::vec3* positions,
-                 glm::vec2* uvs);
+                 glm::vec2* uvs,
+                 glm::vec3* normals);
 Mesh load_obj_mesh(const GraphicsContext& ctx,
                    const std::string& filename);
 void destroy_mesh(const GraphicsContext& ctx, Mesh& mesh);
@@ -43,6 +45,7 @@ void draw_mesh(const GraphicsFrame& frame,
                const Mesh& mesh);
 
 void draw_model(const GraphicsFrame& frame,
-                const glm::mat4& viewproj,
+                const glm::mat4& view,
+                const glm::mat4& proj,
                 const Model& model);
 

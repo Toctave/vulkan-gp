@@ -11,11 +11,12 @@
 #include "hash_tuple.hpp"
 
 Mesh create_mesh(const GraphicsContext& ctx,
-                        size_t vertex_count,
-                        size_t triangle_count,
-                        uint32_t* indices,
-                        glm::vec3* positions,
-                        glm::vec2* uvs) {
+                 size_t vertex_count,
+                 size_t triangle_count,
+                 uint32_t* indices,
+                 glm::vec3* positions,
+                 glm::vec2* uvs,
+                 glm::vec3* normals) {
     Mesh mesh;
     mesh.vertex_count = vertex_count;
     mesh.triangle_count = triangle_count;
@@ -27,6 +28,10 @@ Mesh create_mesh(const GraphicsContext& ctx,
                                               uvs,
                                               vertex_count,
                                               VERTEX_BUFFER);
+    mesh.normal_buffer = allocate_and_fill_buffer(ctx,
+                                                  normals,
+                                                  vertex_count,
+                                                  VERTEX_BUFFER);
     mesh.index_buffer = allocate_and_fill_buffer(ctx,
                                                  indices,
                                                  triangle_count * 3,
@@ -48,6 +53,7 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
     
     std::vector<uint32_t> indices;
     std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
     std::vector<glm::vec2> uvs;
 
     while (std::getline(file, line)) {
@@ -101,6 +107,7 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
 
                     positions.push_back(raw_positions[std::get<0>(face[i]) - 1]);
                     uvs.push_back(raw_uvs[std::get<1>(face[i]) - 1]);
+                    normals.push_back(raw_normals[std::get<2>(face[i]) - 1]);
                 }
                 face_indices[i] = vertex_indices[face[i]];
             }
@@ -128,17 +135,22 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
         }
     }
 
+    assert(positions.size() == uvs.size()
+           && positions.size() == normals.size());
+
     return create_mesh(ctx,
                        positions.size(),
                        indices.size() / 3,
                        indices.data(),
                        positions.data(),
-                       uvs.data());
+                       uvs.data(),
+                       normals.data());
 }
 
 void destroy_mesh(const GraphicsContext& ctx, Mesh& mesh) {
     gpu_buffer_free(ctx, mesh.index_buffer);
     gpu_buffer_free(ctx, mesh.pos_buffer);
     gpu_buffer_free(ctx, mesh.uv_buffer);
+    gpu_buffer_free(ctx, mesh.normal_buffer);
 }
 

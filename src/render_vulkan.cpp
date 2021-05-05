@@ -1,6 +1,7 @@
 #include "render.hpp"
 
 #include "platform_vulkan.hpp"
+#include "memory_util.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -161,31 +162,41 @@ void end_frame(const GraphicsContext &ctx, GraphicsFrame &frame) {
 
 void draw_mesh(const GraphicsFrame& frame,
                const Mesh& mesh) {
-    VkBuffer bind_buffers[2] = {
+    VkBuffer bind_buffers[] = {
         mesh.pos_buffer.handle,
         mesh.uv_buffer.handle,
+        mesh.normal_buffer.handle,
     };
-    VkDeviceSize bind_offsets[2] = {
+    VkDeviceSize bind_offsets[] = {
+        0,
         0,
         0,
     };
     
-    vkCmdBindVertexBuffers(frame.command_buffer, 0, 2, bind_buffers, bind_offsets);
+    vkCmdBindVertexBuffers(frame.command_buffer,
+                           0,
+                           ARRAY_SIZE(bind_buffers),
+                           bind_buffers,
+                           bind_offsets);
     vkCmdBindIndexBuffer(frame.command_buffer, mesh.index_buffer.handle, 0, VK_INDEX_TYPE_UINT32);
 	
     vkCmdDrawIndexed(frame.command_buffer, mesh.triangle_count * 3, 1, 0, 0, 0);
 }
 
 void draw_model(const GraphicsFrame& frame,
-                const glm::mat4& viewproj,
+                const glm::mat4& view,
+                const glm::mat4& proj,
                 const Model& model) {
-    glm::mat4 mvp = viewproj * model.transform;
+    PushMatrices push;
+    push.model_view = view * model.transform;
+    push.mvp = proj * push.model_view;
+
     vkCmdPushConstants(frame.command_buffer,
                        frame.pipeline_layout,
                        VK_SHADER_STAGE_VERTEX_BIT,
                        0,
-                       16 * sizeof(float),
-                       glm::value_ptr(mvp));
+                       sizeof(PushMatrices),
+                       &push);
     
     draw_mesh(frame, *model.mesh);
 }

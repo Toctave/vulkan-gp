@@ -1,9 +1,26 @@
 #version 450
 
 layout (location = 0) in vec2 uv;
+layout (location = 1) in vec3 normal;
 
-layout (location = 0) out vec4 outputColor;
+layout (location = 0) out vec4 out_color;
 
 void main() {
-    outputColor = vec4(uv, 0.0f, 1.0f);
+    vec3 n = normalize(normal);
+    vec3 l = normalize(vec3(1, 1, 1));
+
+    vec3 r = reflect(l, n);
+
+    vec3 ambient = vec3(.05, .05, .05);
+    vec3 diffuse = vec3(.5, .5, 1);
+    vec3 specular = vec3(1, 1, 1);
+
+    float alpha = 10;
+
+    float d = max(0, dot(n, l));
+    float s = pow(max(0, -r.z), alpha);
+
+    vec3 radiance = diffuse * (ambient + d) + specular * s;
+
+    out_color = vec4(radiance, 1);
 }
