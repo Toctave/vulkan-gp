@@ -3,17 +3,25 @@
 #include <glm/glm.hpp>
 #include "platform.hpp"
 
+struct Vertex {
+    glm::vec3 position;
+    glm::vec2 uv;
+    glm::vec3 normal;
+};
+static_assert(sizeof(Vertex) == sizeof(float) * 8, "Wrong size for Vertex");
+
 struct Mesh {
-    GPUBuffer<glm::vec3> pos_buffer;
-    GPUBuffer<glm::vec2> uv_buffer;
-    GPUBuffer<glm::vec3> normal_buffer;
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+};
+
+struct GPUMesh {
+    GPUBuffer<Vertex> vertex_buffer;
     GPUBuffer<uint32_t> index_buffer;
-    size_t vertex_count;
-    size_t triangle_count;
 };
 
 struct Model {
-    const Mesh* mesh;
+    const GPUMesh* mesh;
     glm::mat4 transform;
 };
 
@@ -26,23 +34,24 @@ struct Camera {
     float far;
 };
 
-Mesh create_mesh(const GraphicsContext& ctx,
-                 size_t vertex_count,
-                 size_t triangle_count,
-                 uint32_t* indices,
-                 glm::vec3* positions,
-                 glm::vec2* uvs,
-                 glm::vec3* normals);
+GPUMesh gpu_mesh_create(const GraphicsContext& ctx,
+                        size_t vertex_count,
+                        size_t triangle_count,
+                        const Vertex* vertices,
+                        const uint32_t* indices);
+GPUMesh gpu_mesh_create(const GraphicsContext& ctx, const Mesh& mesh);
+
 Mesh load_obj_mesh(const GraphicsContext& ctx,
                    const std::string& filename);
-void destroy_mesh(const GraphicsContext& ctx, Mesh& mesh);
+
+void gpu_mesh_destroy(const GraphicsContext& ctx, GPUMesh& mesh);
 
 GraphicsFrame begin_frame(GraphicsContext& ctx);
 void end_frame(const GraphicsContext& ctx,
                GraphicsFrame& frame);
 
 void draw_mesh(const GraphicsFrame& frame,
-               const Mesh& mesh);
+               const GPUMesh& mesh);
 
 void draw_model(const GraphicsFrame& frame,
                 const glm::mat4& view,

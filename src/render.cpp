@@ -10,28 +10,16 @@
 
 #include "hash_tuple.hpp"
 
-Mesh create_mesh(const GraphicsContext& ctx,
-                 size_t vertex_count,
-                 size_t triangle_count,
-                 uint32_t* indices,
-                 glm::vec3* positions,
-                 glm::vec2* uvs,
-                 glm::vec3* normals) {
-    Mesh mesh;
-    mesh.vertex_count = vertex_count;
-    mesh.triangle_count = triangle_count;
-    mesh.pos_buffer = allocate_and_fill_buffer(ctx,
-                                               positions,
-                                               vertex_count,
-                                               VERTEX_BUFFER);
-    mesh.uv_buffer = allocate_and_fill_buffer(ctx,
-                                              uvs,
-                                              vertex_count,
-                                              VERTEX_BUFFER);
-    mesh.normal_buffer = allocate_and_fill_buffer(ctx,
-                                                  normals,
+GPUMesh gpu_mesh_create(const GraphicsContext& ctx,
+                        size_t vertex_count,
+                        size_t triangle_count,
+                        const Vertex* vertices,
+                        const uint32_t* indices) {
+    GPUMesh mesh;
+    mesh.vertex_buffer = allocate_and_fill_buffer(ctx,
+                                                  vertices,
                                                   vertex_count,
-                                                  VERTEX_BUFFER);
+                                                  VERTEX_BUFFER | STORAGE_BUFFER);
     mesh.index_buffer = allocate_and_fill_buffer(ctx,
                                                  indices,
                                                  triangle_count * 3,
@@ -40,6 +28,8 @@ Mesh create_mesh(const GraphicsContext& ctx,
 }
 
 Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
+    Mesh mesh;
+    
     using vertex_tuple = std::tuple<uint32_t, uint32_t, uint32_t>;
     
     std::ifstream file(filename);
@@ -51,11 +41,6 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
     std::vector<glm::vec3> raw_normals;
     std::vector<glm::vec2> raw_uvs;
     
-    std::vector<uint32_t> indices;
-    std::vector<glm::vec3> positions;
-    std::vector<glm::vec3> normals;
-    std::vector<glm::vec2> uvs;
-
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') {
             continue;
@@ -93,7 +78,6 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
                 block_iss.clear();
 
                 if (delim1 != '/' || delim2 != '/') {
-                    std::cout << block << "\n";
                     throw std::runtime_error("Expected '/' in .obj file");
                 }
 
@@ -103,20 +87,24 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
             std::vector<uint32_t> face_indices(face.size());
             for (uint32_t i = 0; i < face_indices.size(); i++) {
                 if (vertex_indices.find(face[i]) == vertex_indices.end()) {
-                    vertex_indices[face[i]] = positions.size();
+                    vertex_indices[face[i]] = mesh.vertices.size();
 
-                    positions.push_back(raw_positions[std::get<0>(face[i]) - 1]);
-                    uvs.push_back(raw_uvs[std::get<1>(face[i]) - 1]);
-                    normals.push_back(raw_normals[std::get<2>(face[i]) - 1]);
+                    Vertex new_vertex = {
+                        raw_positions[std::get<0>(face[i]) - 1],
+                        raw_uvs[std::get<1>(face[i]) - 1],
+                        raw_normals[std::get<2>(face[i]) - 1],
+                    };
+
+                    mesh.vertices.push_back(new_vertex);
                 }
                 face_indices[i] = vertex_indices[face[i]];
             }
 
             for (uint32_t second = 0; second + 1 < face.size(); second++) {
                 uint32_t third = second + 1;
-                indices.push_back(face_indices[0]);
-                indices.push_back(face_indices[second]);
-                indices.push_back(face_indices[third]);
+                mesh.indices.push_back(face_indices[0]);
+                mesh.indices.push_back(face_indices[second]);
+                mesh.indices.push_back(face_indices[third]);
             }
         } else if (head == "v") {
             glm::vec3 pos;
@@ -131,26 +119,23 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
             iss >> normal.x >> normal.y >> normal.z;
             raw_normals.push_back(normal);
         } else {
-            std::cout << "Unknown head " << head << "\n";
+            std::cout << "Unknown .obj file directive '" << head << "'\n";
         }
     }
 
-    assert(positions.size() == uvs.size()
-           && positions.size() == normals.size());
-
-    return create_mesh(ctx,
-                       positions.size(),
-                       indices.size() / 3,
-                       indices.data(),
-                       positions.data(),
-                       uvs.data(),
-                       normals.data());
+    return mesh;
 }
 
-void destroy_mesh(const GraphicsContext& ctx, Mesh& mesh) {
+GPUMesh gpu_mesh_create(const GraphicsContext& ctx, const Mesh& mesh) {
+    return gpu_mesh_create(ctx,
+                           mesh.vertices.size(),
+                           mesh.indices.size() / 3,
+                           mesh.vertices.data(),
+                           mesh.indices.data());
+}
+
+void gpu_mesh_destroy(const GraphicsContext& ctx, GPUMesh& mesh) {
     gpu_buffer_free(ctx, mesh.index_buffer);
-    gpu_buffer_free(ctx, mesh.pos_buffer);
-    gpu_buffer_free(ctx, mesh.uv_buffer);
-    gpu_buffer_free(ctx, mesh.normal_buffer);
+    gpu_buffer_free(ctx, mesh.vertex_buffer);
 }
 

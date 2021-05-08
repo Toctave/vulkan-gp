@@ -14,13 +14,12 @@ target_link_libraries(${PROJECT_NAME} Vulkan::Vulkan)
 target_sources(${PROJECT_NAME} PRIVATE
   src/main.cpp
   src/render.cpp
-  shaders/triangle.vert.spv
-  shaders/triangle.frag.spv
   )
 
 target_sources(${PROJECT_NAME} PRIVATE
   src/platform_vulkan.cpp
   src/render_vulkan.cpp
+  src/compute_vulkan.cpp
   )
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -34,12 +33,19 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # Shaders
 add_custom_target(create-shader-dir ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory shaders)
-add_custom_command(OUTPUT shaders/triangle.vert.spv
-  COMMAND glslangValidator -V src/shaders/triangle.vert.glsl -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/triangle.vert.spv
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  DEPENDS create-shader-dir src/shaders/triangle.vert.glsl)
-add_custom_command(OUTPUT shaders/triangle.frag.spv
-  COMMAND glslangValidator -V src/shaders/triangle.frag.glsl -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/triangle.frag.spv
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  DEPENDS create-shader-dir src/shaders/triangle.frag.glsl)
 
+set(SHADERS
+  shaders/triangle.frag
+  shaders/triangle.vert
+  shaders/test.comp
+  )
+
+foreach(SHADER ${SHADERS})
+  add_custom_command(OUTPUT ${SHADER}.spv
+    COMMAND glslangValidator -V src/${SHADER}.glsl -o ${CMAKE_CURRENT_BINARY_DIR}/${SHADER}.spv
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS create-shader-dir src/${SHADER}.glsl)
+  target_sources(${PROJECT_NAME} PRIVATE
+    ${SHADER}.spv
+    )
+endforeach()

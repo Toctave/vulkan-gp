@@ -2,15 +2,17 @@
 
 #include <cstring>
 
-enum GPUBufferUsage {
-    VERTEX_BUFFER,
-    INDEX_BUFFER,
+enum GPUBufferUsageFlags {
+    VERTEX_BUFFER  = 0x00000001,
+    INDEX_BUFFER   = 0x00000002,
+    UNIFORM_BUFFER = 0x00000004,
+    STORAGE_BUFFER = 0x00000008,
 };
 
 #if 1
 
 #include "platform_vulkan.hpp"
-using GraphicsContext = VulkanContext;
+using GraphicsContext = VulkanGraphicsContext;
 using GraphicsFrame = VulkanFrame;
 
 template<typename T>
@@ -26,7 +28,7 @@ template<typename T>
 GPUBuffer<T> allocate_and_fill_buffer(const GraphicsContext& ctx,
                                       const T* data,
                                       size_t count,
-                                      GPUBufferUsage usage) {
+                                      uint32_t usage) {
     GPUBuffer<T> buf = gpu_buffer_allocate<T>(ctx, usage, count);
 
     T* device_data = gpu_buffer_map(ctx, buf);

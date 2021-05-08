@@ -9,9 +9,11 @@
 #include "time_util.hpp"
 #include "platform.hpp"
 #include "render.hpp"
+#include "compute_vulkan.hpp"
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_access.hpp>
 #include <glm/gtx/transform.hpp>
 
 enum MouseButtonMask {
@@ -43,53 +45,83 @@ static void update_orbit_camera(Camera& cam, float lat, float lng, float r, glm:
                         std::sin(lat));
 }
 
+bool intersect(const GraphicsContext& ctx,
+               const Mesh& mesh,
+               const glm::vec3& ray_o,
+               const glm::vec3& ray_d,
+               float* t_out) {
+    bool rval = false;
+    float tmax;
+
+    for (size_t i = 0; i < mesh.indices.size() / 3; i++) {
+        glm::vec3 edge1 = mesh.vertices[mesh.indices[i * 3 + 1]].position - mesh.vertices[mesh.indices[i * 3]].position;
+        glm::vec3 edge2 = mesh.vertices[mesh.indices[i * 3 + 2]].position - mesh.vertices[mesh.indices[i * 3]].position;
+        glm::vec3 h = glm::cross(ray_d, edge2);
+        float a = glm::dot(edge1, h);
+        if (a == 0.0f)
+            continue;    // ray parallel to the triangle
+
+        float f = 1.0f/a;
+        glm::vec3 s = ray_o - mesh.vertices[mesh.indices[i * 3]].position;
+        float u = f * glm::dot(s, h);
+        if (u < 0.0f || u > 1.0f)
+            continue;
+        glm::vec3 q = glm::cross(s, edge1);
+        float v = f * glm::dot(ray_d, q);
+        if (v < 0.0f || u + v > 1.0f)
+            continue;
+
+        // On calcule t pour savoir ou le point d'intersection se situe sur la ligne.
+        float t = f * glm::dot(edge2, q);
+        if (t > 0.0f && (!rval || t < tmax)) {
+            if (t_out) {
+                *t_out = t;
+            }
+            tmax = t;
+            rval = true;
+        } 
+    }
+
+    return rval;
+}
+
 int main(int argc, char** argv) {
     GraphicsContext ctx;
-
     graphics_init(ctx);
-
-    std::vector<glm::vec3> vertex_positions = {
-        {-.5f, -.5f, 0},
-        {.5f, -.5f, 0},
-        {.5f, .5f, 0},     
-        {-.5f, .5f, 0},
-    };
-
-    std::vector<glm::vec2> vertex_uvs = {
-        {0, 0},
-        {1, 0},
-        {1, 1},
-        {0, 1},
-    };
     
-    std::vector<glm::vec3> vertex_normals = {
-        {0, 0, 1},
-        {0, 0, 1},
-        {0, 0, 1},
-        {0, 0, 1},
+    VulkanComputeContext cctx;
+    compute_init(ctx.vk, cctx);
+
+    std::vector<Vertex> vertices = {
+        {{-.5f, -.5f, 0}, {0, 0}, {0, 0, 1}},
+        {{.5f, -.5f, 0}, {0, 0}, {0, 0, 1}},
+        {{.5f, .5f, 0}, {0, 0}, {0, 0, 1}},     
+        {{-.5f, .5f, 0}, {0, 0}, {0, 0, 1}},
     };
 
-    assert(vertex_uvs.size() == vertex_positions.size());
-
-    std::vector<uint32_t> vertex_indices = {
+    std::vector<uint32_t> indices = {
         0, 1, 2,
         0, 2, 3,
     };
-    assert(vertex_indices.size() % 3 == 0);
+    assert(indices.size() % 3 == 0);
 
-    Mesh plane = create_mesh(ctx,
-                             vertex_positions.size(),
-                             vertex_indices.size() / 3,
-                             vertex_indices.data(),
-                             vertex_positions.data(),
-                             vertex_uvs.data(),
-                             vertex_normals.data());
+    GPUMesh plane = gpu_mesh_create(ctx,
+                                    vertices.size(),
+                                    indices.size() / 3,
+                                    vertices.data(),
+                                    indices.data());
     
-    Mesh suzanne = load_obj_mesh(ctx, "suzanne_smooth.obj");
+    Mesh suzanne_cpu = load_obj_mesh(ctx, "suzanne_smooth.obj");
+    
+    GPUMesh suzanne = gpu_mesh_create(ctx, suzanne_cpu);
+
+    test_compute(cctx, suzanne);
+
+    compute_finalize(cctx);
     
     std::vector<Model> models = {
         {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
-        {&plane, glm::translate(glm::vec3(0, 0, 1))},
+        {&plane, glm::translate(glm::vec3(0, 0, 0))},
     };
     
     float orbit_speed = 2.0f;
@@ -125,10 +157,8 @@ int main(int argc, char** argv) {
 
             switch (event.type) {
             case ClientMessage:
-                if (event.xclient.message_type ==
-                    XInternAtom(ctx.wm.display, "WM_PROTOCOLS", true) &&
-                    event.xclient.data.l[0] ==
-                    XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", true)) {
+                if (event.xclient.message_type == XInternAtom(ctx.wm.display, "WM_PROTOCOLS", true)
+                    && event.xclient.data.l[0] == XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", true)) {
                     should_close = true;
                 }
                 break;
@@ -194,21 +224,42 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
-        models[0].transform = glm::scale(glm::vec3(.5f))
-            * glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
-            * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1));
+        // models[0].transform = glm::scale(glm::vec3(.5f))
+            // * glm::translate(glm::vec3(std::sin(elapsed), 0, 0));
+            // * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
+            // * glm::rotate(2.0f * static_cast<float>(M_PI) * 1.3f * freq * elapsed, glm::vec3(0, 1, 0));
 
         update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
-        
-        GraphicsFrame frame = begin_frame(ctx);
 
-        cam.aspect = static_cast<float>(ctx.swapchain.extent.width) / static_cast<float>(ctx.swapchain.extent.height);
-        for (const Model &model : models) {
-            draw_model(frame, camera_view(cam), camera_proj(cam), model);
+        glm::mat4 viewproj_inv = glm::inverse(camera_proj(cam) * camera_view(cam));
+        
+        glm::vec4 mouse_world_h = viewproj_inv * glm::vec4(mouse_position, 0.0f, 1.0f);
+        glm::vec3 mouse_world = mouse_world_h / mouse_world_h.w;
+
+        glm::vec3 ray_d = glm::normalize(mouse_world - cam.eye);
+
+        float t;
+        if (intersect(ctx, suzanne_cpu, cam.eye, ray_d, &t)) {
+            glm::vec3 target = cam.eye + t * ray_d;
+            models[1].transform =
+                glm::translate(target);
+        } else {
+            models[1].transform =
+                glm::scale(glm::vec3(0.0f));
         }
 
-        end_frame(ctx, frame);
-        
+        GraphicsFrame frame = begin_frame(ctx);
+        {
+            cam.aspect = static_cast<float>(ctx.swapchain.extent.width)
+                / static_cast<float>(ctx.swapchain.extent.height);
+
+            for (const Model &model : models) {
+                draw_model(frame, camera_view(cam), camera_proj(cam), model);
+            }
+
+            end_frame(ctx, frame);
+        }
+
         current_frame++;
     }
 
@@ -219,8 +270,8 @@ int main(int argc, char** argv) {
 
     graphics_wait_idle(ctx);
 
-    destroy_mesh(ctx, plane);
-    destroy_mesh(ctx, suzanne);
+    gpu_mesh_destroy(ctx, plane);
+    gpu_mesh_destroy(ctx, suzanne);
 
     graphics_finalize(ctx);
 }
