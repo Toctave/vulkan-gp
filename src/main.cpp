@@ -105,20 +105,23 @@ int main(int argc, char** argv) {
     };
     assert(indices.size() % 3 == 0);
 
-    GPUMesh plane = gpu_mesh_create(ctx,
+    GPUMesh plane = gpu_mesh_create(ctx.vk,
                                     vertices.size(),
                                     indices.size() / 3,
                                     vertices.data(),
                                     indices.data());
     
-    Mesh suzanne_cpu = load_obj_mesh(ctx, "suzanne_smooth.obj");
-    
-    GPUMesh suzanne = gpu_mesh_create(ctx, suzanne_cpu);
+    Mesh suzanne_cpu = load_obj_mesh("suzanne_smooth.obj");
+    GPUMesh suzanne = gpu_mesh_create(ctx.vk, suzanne_cpu);
+    GPUBuffer<Vertex> base_vertices = suzanne.vertex_buffer;
+    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(ctx.vk,
+                                                        (uint32_t)(COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER),
+                                                        suzanne.vertex_buffer.count);
 
-    test_compute(cctx, suzanne);
+    // test_compute(cctx, suzanne);
+    auto kernel =
+        compute_kernel_create<GPUBuffer<Vertex>, GPUBuffer<Vertex>, GPUBuffer<float>>(cctx, "shaders/wiggle.comp.spv");
 
-    compute_finalize(cctx);
-    
     std::vector<Model> models = {
         {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
         {&plane, glm::translate(glm::vec3(0, 0, 0))},
@@ -224,6 +227,15 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
+        GPUBuffer<float> t_buf = allocate_and_fill_buffer(ctx.vk, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
+        compute_kernel_invoke(cctx,
+                              kernel,
+                              suzanne.vertex_buffer.count / 32 + 1, 1, 1,
+                              base_vertices,
+                              suzanne.vertex_buffer,
+                              t_buf);
+        gpu_buffer_free(ctx.vk, t_buf);
+
         // models[0].transform = glm::scale(glm::vec3(.5f))
             // * glm::translate(glm::vec3(std::sin(elapsed), 0, 0));
             // * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
@@ -270,8 +282,13 @@ int main(int argc, char** argv) {
 
     graphics_wait_idle(ctx);
 
-    gpu_mesh_destroy(ctx, plane);
-    gpu_mesh_destroy(ctx, suzanne);
+    compute_kernel_destroy(cctx, kernel);
+    compute_finalize(cctx);
+    
+    gpu_mesh_destroy(ctx.vk, plane);
+    gpu_mesh_destroy(ctx.vk, suzanne);
+
+    gpu_buffer_free(ctx.vk, base_vertices);
 
     graphics_finalize(ctx);
 }

@@ -37,7 +37,7 @@ add_custom_target(create-shader-dir ALL
 set(SHADERS
   shaders/triangle.frag
   shaders/triangle.vert
-  shaders/test.comp
+  shaders/wiggle.comp
   )
 
 foreach(SHADER ${SHADERS})

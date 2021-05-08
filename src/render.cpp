@@ -10,7 +10,7 @@
 
 #include "hash_tuple.hpp"
 
-GPUMesh gpu_mesh_create(const GraphicsContext& ctx,
+GPUMesh gpu_mesh_create(const GPUContext& ctx,
                         size_t vertex_count,
                         size_t triangle_count,
                         const Vertex* vertices,
@@ -27,7 +27,7 @@ GPUMesh gpu_mesh_create(const GraphicsContext& ctx,
     return mesh;
 }
 
-Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
+Mesh load_obj_mesh(const std::string &filename) {
     Mesh mesh;
     
     using vertex_tuple = std::tuple<uint32_t, uint32_t, uint32_t>;
@@ -126,7 +126,7 @@ Mesh load_obj_mesh(const GraphicsContext &ctx, const std::string &filename) {
     return mesh;
 }
 
-GPUMesh gpu_mesh_create(const GraphicsContext& ctx, const Mesh& mesh) {
+GPUMesh gpu_mesh_create(const GPUContext& ctx, const Mesh& mesh) {
     return gpu_mesh_create(ctx,
                            mesh.vertices.size(),
                            mesh.indices.size() / 3,
@@ -134,7 +134,7 @@ GPUMesh gpu_mesh_create(const GraphicsContext& ctx, const Mesh& mesh) {
                            mesh.indices.data());
 }
 
-void gpu_mesh_destroy(const GraphicsContext& ctx, GPUMesh& mesh) {
+void gpu_mesh_destroy(const GPUContext& ctx, GPUMesh& mesh) {
     gpu_buffer_free(ctx, mesh.index_buffer);
     gpu_buffer_free(ctx, mesh.vertex_buffer);
 }

@@ -19,11 +19,3 @@ void compute_init(const VulkanContext &vk, VulkanComputeContext &ctx) {
 void compute_finalize(const VulkanComputeContext& ctx) {
     vkDestroyCommandPool(ctx.vk.device, ctx.command_pool, nullptr);
 }
-
-void test_compute(const VulkanComputeContext& ctx, const GPUMesh& mesh) {
-    VulkanComputeKernel<GPUBuffer<Vertex>> kernel =
-        compute_kernel_create<GPUBuffer<Vertex>>(ctx, "shaders/test.comp.spv");
-    compute_kernel_invoke(ctx, kernel, mesh.vertex_buffer.count, 1, 1, mesh.vertex_buffer);
-
-    compute_kernel_destroy(ctx, kernel);
-}

@@ -135,6 +135,7 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
     descriptor_pool_ci.maxSets = 1;
     descriptor_pool_ci.poolSizeCount = sizes.size();
     descriptor_pool_ci.pPoolSizes = sizes.data();
+    descriptor_pool_ci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
     if (vkCreateDescriptorPool(ctx.vk.device,
                                &descriptor_pool_ci,
@@ -268,6 +269,9 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
 
     vkWaitForFences(ctx.vk.device, 1, &submit_done, VK_TRUE, UINT64_MAX);
     vkDestroyFence(ctx.vk.device, submit_done, nullptr);
+
+    vkFreeDescriptorSets(ctx.vk.device, kernel.descriptor_pool, 1, &descriptor_set);
+    vkFreeCommandBuffers(ctx.vk.device, ctx.command_pool, 1, &command_buffer);
 }
 
 void compute_init(const VulkanContext &vk, VulkanComputeContext &ctx);

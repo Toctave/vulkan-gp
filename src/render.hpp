@@ -34,17 +34,16 @@ struct Camera {
     float far;
 };
 
-GPUMesh gpu_mesh_create(const GraphicsContext& ctx,
+GPUMesh gpu_mesh_create(const GPUContext& ctx,
                         size_t vertex_count,
                         size_t triangle_count,
                         const Vertex* vertices,
                         const uint32_t* indices);
-GPUMesh gpu_mesh_create(const GraphicsContext& ctx, const Mesh& mesh);
+GPUMesh gpu_mesh_create(const GPUContext& ctx, const Mesh& mesh);
 
-Mesh load_obj_mesh(const GraphicsContext& ctx,
-                   const std::string& filename);
+Mesh load_obj_mesh(const std::string& filename);
 
-void gpu_mesh_destroy(const GraphicsContext& ctx, GPUMesh& mesh);
+void gpu_mesh_destroy(const GPUContext& ctx, GPUMesh& mesh);
 
 GraphicsFrame begin_frame(GraphicsContext& ctx);
 void end_frame(const GraphicsContext& ctx,
