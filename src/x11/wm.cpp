@@ -1,6 +1,6 @@
-#include "platform_wm.hpp"
+#include "wm.hpp"
 
-void wm_init(WMContext &wm) {
+void wm_init(X11Context &wm) {
     wm.display = XOpenDisplay(nullptr);
     wm.window = XCreateSimpleWindow(wm.display,
                                     XDefaultRootWindow(wm.display),
@@ -10,3 +10,7 @@ void wm_init(WMContext &wm) {
                                     XBlackPixel(wm.display, XDefaultScreen(wm.display)));
 }
 
+void wm_finalize(X11Context& wm) {
+    // XDestroyWindow(wm.display, wm.window);
+    XCloseDisplay(wm.display);
+}

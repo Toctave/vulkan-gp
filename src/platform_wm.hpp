@@ -2,7 +2,7 @@
 
 #if 1
 
-#include "platform_x11.hpp"
+#include "x11/wm.hpp"
 using WMContext = X11Context;
 
 #endif

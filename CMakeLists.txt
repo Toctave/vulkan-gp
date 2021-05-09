@@ -17,13 +17,15 @@ target_sources(${PROJECT_NAME} PRIVATE
   )
 
 target_sources(${PROJECT_NAME} PRIVATE
-  src/platform_vulkan.cpp
-  src/render_vulkan.cpp
-  src/compute_vulkan.cpp
+  src/vulkan/gpu.cpp
+  src/vulkan/graphics.cpp
+  src/vulkan/internal.cpp
+  src/vulkan/compute.cpp
+  src/vulkan/render.cpp
   )
 
 target_sources(${PROJECT_NAME} PRIVATE
-  src/platform_x11.cpp
+  src/x11/wm.cpp
   )
   
 # GLM

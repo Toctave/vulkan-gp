@@ -1,6 +1,6 @@
 #include "render.hpp"
 
-#include "platform.hpp"
+#include "platform_gpu.hpp"
 
 #include <iostream>
 #include <fstream>

@@ -1,14 +1,12 @@
 #pragma once
 
-#include "platform_wm.hpp"
+#include "../common/platform.hpp"
+#include "internal.hpp"
 
 #include <vulkan/vulkan.h>
-#include <glm/glm.hpp>
 
 #include <vector>
 #include <stdexcept>
-
-#define MAX_FRAMES_IN_FLIGHT 3
 
 template<typename T>
 struct VulkanBuffer {
@@ -23,21 +21,6 @@ struct VulkanImage {
     VkDeviceMemory memory;
 };
 
-struct Swapchain {
-    VkSwapchainKHR handle;
-    
-    VkExtent2D extent;
-    VkSurfaceFormatKHR format;
-    
-    VkRenderPass render_pass;
-    
-    VulkanImage depth_image;
-    std::vector<VkImage> images;
-    std::vector<VkImageView> image_views;
-    std::vector<int64_t> frames;
-    std::vector<VkFramebuffer> framebuffers;
-};
-
 struct VulkanContext {
     VkInstance instance;
     VkPhysicalDevice physical_device;
@@ -46,49 +29,6 @@ struct VulkanContext {
     uint32_t graphics_queue_idx;
     uint32_t compute_queue_idx;
 };
-
-struct VulkanGraphicsContext {
-    VulkanContext vk;
-    
-    VkCommandPool command_pool;
-    std::vector<VkCommandBuffer> command_buffers;
-
-    VkPipelineLayout pipeline_layout;
-    std::vector<VkShaderModule> shaders;
-    VkPipeline pipeline;
-
-    Swapchain swapchain;
-    uint32_t next_frame;
-
-    VkSemaphore swapchain_image_ready[MAX_FRAMES_IN_FLIGHT];
-    VkSemaphore swapchain_submit_done[MAX_FRAMES_IN_FLIGHT];
-    VkFence frame_finished[MAX_FRAMES_IN_FLIGHT];
-
-    VkSurfaceKHR surface;
-
-    WMContext wm;
-};
-
-struct VulkanFrame {
-    VkCommandBuffer command_buffer;
-    VkPipelineLayout pipeline_layout;
-    uint32_t frame_index;
-    uint32_t image_index;
-};
-
-struct PushMatrices {
-    glm::mat4 mvp;
-    glm::mat4 model_view;
-};
-
-int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,
-                         uint32_t memory_type_req,
-                         VkMemoryPropertyFlagBits properties_req);
-void recreate_swapchain(VulkanGraphicsContext& ctx);
-
-VkShaderModule create_shader_module(VkDevice device, const std::string& file_name);
-
-VkBufferUsageFlags to_vulkan_flags(uint32_t usage);
 
 template<typename T>
 VulkanBuffer<T> gpu_buffer_allocate(const VulkanContext& vk,
@@ -163,4 +103,3 @@ static void gpu_buffer_free(const VulkanContext& ctx, VulkanBuffer<T>& buf) {
     vkFreeMemory(ctx.device, buf.memory, nullptr);
     vkDestroyBuffer(ctx.device, buf.handle, nullptr);
 }
-

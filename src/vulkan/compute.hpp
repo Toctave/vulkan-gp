@@ -1,12 +1,12 @@
 #pragma once
 
-#include "platform.hpp"
-#include "render.hpp"
+// #include "../render.hpp"
+#include "gpu.hpp"
 
 #include <iostream>
 
 struct VulkanComputeContext {
-    VulkanContext vk;
+    const VulkanContext* vk;
 
     VkCommandPool command_pool;
 };
@@ -30,7 +30,7 @@ struct DescriptorType {
 };
 
 template<typename T>
-struct DescriptorType<GPUBuffer<T>> {
+struct DescriptorType<VulkanBuffer<T>> {
     static const VkDescriptorType value = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 };
 
@@ -91,7 +91,7 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
     set_layout_ci.bindingCount = sizeof...(Args);
     set_layout_ci.pBindings = bindings;
 
-    if (vkCreateDescriptorSetLayout(ctx.vk.device,
+    if (vkCreateDescriptorSetLayout(ctx.vk->device,
                                     &set_layout_ci,
                                     nullptr,
                                     &kernel.descriptor_set_layout) != VK_SUCCESS) {
@@ -103,11 +103,11 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
     layout_ci.setLayoutCount = 1;
     layout_ci.pSetLayouts = &kernel.descriptor_set_layout;
 
-    if (vkCreatePipelineLayout(ctx.vk.device, &layout_ci, nullptr, &kernel.pipeline_layout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(ctx.vk->device, &layout_ci, nullptr, &kernel.pipeline_layout) != VK_SUCCESS) {
         throw std::runtime_error("Could not create pipeline layout.");
     }
 
-    kernel.module = create_shader_module(ctx.vk.device, source_filename);
+    kernel.module = create_shader_module(ctx.vk->device, source_filename);
 
     VkComputePipelineCreateInfo pipeline_ci{};
     pipeline_ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -118,7 +118,7 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
     pipeline_ci.stage.module = kernel.module;
     pipeline_ci.stage.pName = "main";
 
-    if (vkCreateComputePipelines(ctx.vk.device,
+    if (vkCreateComputePipelines(ctx.vk->device,
                                  VK_NULL_HANDLE,
                                  1,
                                  &pipeline_ci,
@@ -137,7 +137,7 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
     descriptor_pool_ci.pPoolSizes = sizes.data();
     descriptor_pool_ci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-    if (vkCreateDescriptorPool(ctx.vk.device,
+    if (vkCreateDescriptorPool(ctx.vk->device,
                                &descriptor_pool_ci,
                                nullptr,
                                &kernel.descriptor_pool) != VK_SUCCESS) {
@@ -150,11 +150,11 @@ VulkanComputeKernel<Args...> compute_kernel_create(const VulkanComputeContext& c
 template<typename... Args>
 void compute_kernel_destroy(const VulkanComputeContext& ctx,
                             VulkanComputeKernel<Args...>& kernel) {
-    vkDestroyDescriptorPool(ctx.vk.device, kernel.descriptor_pool, nullptr);
-    vkDestroyPipeline(ctx.vk.device, kernel.pipeline, nullptr);
-    vkDestroyPipelineLayout(ctx.vk.device, kernel.pipeline_layout, nullptr);
-    vkDestroyDescriptorSetLayout(ctx.vk.device, kernel.descriptor_set_layout, nullptr);
-    vkDestroyShaderModule(ctx.vk.device, kernel.module, nullptr);
+    vkDestroyDescriptorPool(ctx.vk->device, kernel.descriptor_pool, nullptr);
+    vkDestroyPipeline(ctx.vk->device, kernel.pipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.vk->device, kernel.pipeline_layout, nullptr);
+    vkDestroyDescriptorSetLayout(ctx.vk->device, kernel.descriptor_set_layout, nullptr);
+    vkDestroyShaderModule(ctx.vk->device, kernel.module, nullptr);
 }
 
 template<typename Arg>
@@ -166,11 +166,11 @@ struct UpdateDescriptorSet {
 };
 
 template<typename T>
-struct UpdateDescriptorSet<GPUBuffer<T>> {
+struct UpdateDescriptorSet<VulkanBuffer<T>> {
     static void f(const VulkanComputeContext& ctx,
                   VkDescriptorSet set,
                   uint32_t binding,
-                  GPUBuffer<T> buf) {
+                  VulkanBuffer<T> buf) {
         
         VkDescriptorBufferInfo buffer_info{};
         buffer_info.buffer = buf.handle;
@@ -185,7 +185,7 @@ struct UpdateDescriptorSet<GPUBuffer<T>> {
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         
-        vkUpdateDescriptorSets(ctx.vk.device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(ctx.vk->device, 1, &write, 0, nullptr);
     }
 };
 
@@ -214,7 +214,7 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
 
     VkCommandBuffer command_buffer;
 
-    if (vkAllocateCommandBuffers(ctx.vk.device, &command_buffer_ai, &command_buffer) != VK_SUCCESS) {
+    if (vkAllocateCommandBuffers(ctx.vk->device, &command_buffer_ai, &command_buffer) != VK_SUCCESS) {
         throw std::runtime_error("Could not allocate compute command buffer.");
     }
 
@@ -225,7 +225,7 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
     descriptor_set_ai.descriptorSetCount = 1;
     descriptor_set_ai.pSetLayouts = &kernel.descriptor_set_layout;
     
-    if (vkAllocateDescriptorSets(ctx.vk.device, &descriptor_set_ai, &descriptor_set) != VK_SUCCESS) {
+    if (vkAllocateDescriptorSets(ctx.vk->device, &descriptor_set_ai, &descriptor_set) != VK_SUCCESS) {
         throw std::runtime_error("Could not allocate compute descriptor set.");
     }
 
@@ -253,12 +253,12 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
     vkEndCommandBuffer(command_buffer);
 
     VkQueue queue;
-    vkGetDeviceQueue(ctx.vk.device, ctx.vk.compute_queue_idx, 0, &queue);
+    vkGetDeviceQueue(ctx.vk->device, ctx.vk->compute_queue_idx, 0, &queue);
 
     VkFence submit_done;
     VkFenceCreateInfo submit_done_ci{};
     submit_done_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    vkCreateFence(ctx.vk.device, &submit_done_ci, nullptr, &submit_done);
+    vkCreateFence(ctx.vk->device, &submit_done_ci, nullptr, &submit_done);
 
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -267,13 +267,13 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
     
     vkQueueSubmit(queue, 1, &submit_info, submit_done);
 
-    vkWaitForFences(ctx.vk.device, 1, &submit_done, VK_TRUE, UINT64_MAX);
-    vkDestroyFence(ctx.vk.device, submit_done, nullptr);
+    vkWaitForFences(ctx.vk->device, 1, &submit_done, VK_TRUE, UINT64_MAX);
+    vkDestroyFence(ctx.vk->device, submit_done, nullptr);
 
-    vkFreeDescriptorSets(ctx.vk.device, kernel.descriptor_pool, 1, &descriptor_set);
-    vkFreeCommandBuffers(ctx.vk.device, ctx.command_pool, 1, &command_buffer);
+    vkFreeDescriptorSets(ctx.vk->device, kernel.descriptor_pool, 1, &descriptor_set);
+    vkFreeCommandBuffers(ctx.vk->device, ctx.command_pool, 1, &command_buffer);
 }
 
-void compute_init(const VulkanContext &vk, VulkanComputeContext &ctx);
+void compute_init(const VulkanContext* vk, VulkanComputeContext &ctx);
 void compute_finalize(const VulkanComputeContext& ctx);
 

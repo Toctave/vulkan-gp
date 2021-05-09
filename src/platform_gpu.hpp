@@ -2,18 +2,12 @@
 
 #include <cstring>
 
-enum GPUBufferUsageFlags {
-    VERTEX_BUFFER  = 0x00000001,
-    INDEX_BUFFER   = 0x00000002,
-    UNIFORM_BUFFER = 0x00000004,
-    STORAGE_BUFFER = 0x00000008,
-    GRAPHICS       = 0x00000010,
-    COMPUTE        = 0x00000020,
-};
-
 #if 1
 
-#include "platform_vulkan.hpp"
+#include "vulkan/gpu.hpp"
+#include "vulkan/graphics.hpp"
+#include "vulkan/compute.hpp"
+
 using GPUContext = VulkanContext;
 using GraphicsContext = VulkanGraphicsContext;
 using GraphicsFrame = VulkanFrame;
@@ -26,7 +20,7 @@ using GPUBuffer = VulkanBuffer<T>;
 void gpu_init(GPUContext& ctx);
 void gpu_finalize(GPUContext& ctx);
 
-void graphics_init(const GPUContext& ctx, GraphicsContext& graphics);
+void graphics_init(const GPUContext* ctx, const WMContext* wm, GraphicsContext& graphics);
 void graphics_finalize(GraphicsContext& graphics);
 void graphics_wait_idle(const GraphicsContext& graphics);
 

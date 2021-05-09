@@ -1,7 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
-#include "platform.hpp"
+#include "platform_gpu.hpp"
 
 struct Vertex {
     glm::vec3 position;

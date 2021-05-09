@@ -1,46 +1,6 @@
-#include "platform.hpp"
+#include "graphics.hpp"
 
-#include "memory_util.hpp"
-
-#include <cstring>
-#include <fstream>
-#include <iostream>
-#include <cassert>
-
-VkBufferUsageFlags to_vulkan_flags(uint32_t usage) {
-    VkBufferUsageFlags rval = 0;
-    if (usage & INDEX_BUFFER) {
-        rval |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    }
-    if (usage & VERTEX_BUFFER) {
-        rval |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    }
-    if (usage & UNIFORM_BUFFER) {
-        rval |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    }
-    if (usage & STORAGE_BUFFER) {
-        rval |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    }
-
-    return rval;
-}
-
-int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,
-                         uint32_t memory_type_req,
-                         VkMemoryPropertyFlagBits properties_req) {
-    for (uint32_t i = 0; i < props->memoryTypeCount; i++) {
-        uint32_t memory_type_bitmask = (1 << i);
-        bool type_ok = memory_type_bitmask & memory_type_req;
-	
-        bool props_ok = ((props->memoryTypes[i].propertyFlags & properties_req) == properties_req);
-
-        if (type_ok && props_ok) {
-            return i;
-        }
-    }
-
-    return -1;
-}
+#include "../platform_wm.hpp"
 
 static VulkanImage allocate_image(VkDevice device, VkPhysicalDevice physical_device, VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height) {
     VulkanImage image;
@@ -97,6 +57,12 @@ static VulkanImage allocate_image(VkDevice device, VkPhysicalDevice physical_dev
     }
 
     return image;
+}
+
+static void destroy_image(VkDevice device, VulkanImage& image) {
+    vkDestroyImageView(device, image.view, nullptr);
+    vkFreeMemory(device, image.memory, nullptr);
+    vkDestroyImage(device, image.handle, nullptr);
 }
 
 static Swapchain create_swapchain(VkDevice device,
@@ -289,202 +255,55 @@ static Swapchain create_swapchain(VkDevice device,
     return swapchain;
 }
 
-void gpu_init(VulkanContext& ctx) {
-    uint32_t layer_count;
-    vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
 
-    std::vector<VkLayerProperties> layer_properties(layer_count);
-    vkEnumerateInstanceLayerProperties(&layer_count, layer_properties.data());
-
-    std::vector<const char*> required_layers = {
-        "VK_LAYER_KHRONOS_validation"
-    };
-
-    for (const char* name : required_layers) {
-        bool found = false;
-        for (const auto& prop : layer_properties) {
-            if (!strcmp(prop.layerName, name)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            throw std::runtime_error("Could not find required layer " + std::string(name) + ".");
-        }
-    }
-
-    uint32_t extension_count;
-    vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr);
+static void destroy_swapchain(VkDevice device, Swapchain& swapchain) {
+    vkDestroyRenderPass(device, swapchain.render_pass, nullptr);
     
-    std::vector<VkExtensionProperties> extension_properties(extension_count);
-    vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, extension_properties.data());
-
-    std::vector<const char*> required_extensions = {
-        "VK_KHR_surface",
-        "VK_KHR_xlib_surface",
-    };
-
-    for (const char* name : required_extensions) {
-        bool found = false;
-        for (const auto& prop : extension_properties) {
-            if (!strcmp(prop.extensionName, name)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            throw std::runtime_error("Could not find required extension " + std::string(name) + ".");
-        }
+    for (size_t i = 0; i < swapchain.images.size(); i++) {
+        vkDestroyFramebuffer(device, swapchain.framebuffers[i], nullptr);
+        vkDestroyImageView(device, swapchain.image_views[i], nullptr);
     }
+    destroy_image(device, swapchain.depth_image);
 
-    VkApplicationInfo app_info{};
-    app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app_info.apiVersion = VK_API_VERSION_1_0;
-
-    VkInstanceCreateInfo instance_ci{};
-    instance_ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instance_ci.enabledLayerCount = required_layers.size();
-    instance_ci.ppEnabledLayerNames = required_layers.data();
-    instance_ci.enabledExtensionCount = required_extensions.size();
-    instance_ci.ppEnabledExtensionNames = required_extensions.data();
-    instance_ci.pApplicationInfo = &app_info;
-
-    if (vkCreateInstance(&instance_ci, nullptr, &ctx.instance) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create vulkan instance.");
-    }
-
-    uint32_t physical_device_count;
-    vkEnumeratePhysicalDevices(ctx.instance, &physical_device_count, nullptr);
-
-    std::vector<VkPhysicalDevice> physical_devices(physical_device_count);
-    vkEnumeratePhysicalDevices(ctx.instance, &physical_device_count, physical_devices.data());
-
-    std::vector<const char*> required_device_extensions = {
-        "VK_KHR_swapchain",
-        "VK_KHR_maintenance1",
-        "VK_KHR_shader_non_semantic_info",
-    };
-    
-    ctx.physical_device = VK_NULL_HANDLE;
-    for (const auto& candidate : physical_devices) {
-        uint32_t device_extension_count;
-        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &device_extension_count, nullptr);
-    
-        std::vector<VkExtensionProperties> device_extension_properties(device_extension_count);
-        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &device_extension_count, device_extension_properties.data());
-
-        bool all_found = true;
-        for (const char* name : required_device_extensions) {
-            bool found = false;
-            for (const auto& prop : device_extension_properties) {
-                if (!strcmp(prop.extensionName, name)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                all_found = false;
-                break;
-            }
-        }
-        if (!all_found) {
-            continue;
-        }
-
-        VkPhysicalDeviceProperties properties;
-        vkGetPhysicalDeviceProperties(candidate, &properties);
-
-        if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            ctx.physical_device = candidate;
-            break;
-        }
-    }
-
-    if (ctx.physical_device == VK_NULL_HANDLE) {
-        throw std::runtime_error("Could not find a GPU.");
-    }
-
-    uint32_t family_count;
-    vkGetPhysicalDeviceQueueFamilyProperties(ctx.physical_device, &family_count, nullptr);
-    std::vector<VkQueueFamilyProperties> families(family_count);
-    vkGetPhysicalDeviceQueueFamilyProperties(ctx.physical_device, &family_count, families.data());
-
-    int graphics_idx = -1;
-    int compute_idx = -1;
-    for (int i = 0; i < families.size(); i++) {
-        if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            graphics_idx = i;
-        }
-        if (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-            compute_idx = i;
-        }
-    }
-
-    if (graphics_idx < 0) {
-        throw std::runtime_error("GPU does not support graphics.");
-    }
-    if (compute_idx < 0) {
-        throw std::runtime_error("GPU does not support compute.");
-    }
-    ctx.graphics_queue_idx = graphics_idx;
-    ctx.compute_queue_idx = compute_idx;
-
-    float priority = 1.0f;
-    VkDeviceQueueCreateInfo graphics_queue_ci{};
-    graphics_queue_ci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    graphics_queue_ci.queueFamilyIndex = graphics_idx;
-    graphics_queue_ci.queueCount = 1;
-    graphics_queue_ci.pQueuePriorities = &priority;
-
-    VkDeviceQueueCreateInfo compute_queue_ci{};
-    compute_queue_ci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    compute_queue_ci.queueFamilyIndex = compute_idx;
-    compute_queue_ci.queueCount = 1;
-    compute_queue_ci.pQueuePriorities = &priority;
-
-    VkDeviceQueueCreateInfo queue_cis[] = {graphics_queue_ci, compute_queue_ci};
-
-    VkDeviceCreateInfo device_ci{};
-    device_ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    device_ci.queueCreateInfoCount = ARRAY_SIZE(queue_cis);
-    device_ci.pQueueCreateInfos = queue_cis;
-    device_ci.ppEnabledExtensionNames = required_device_extensions.data();
-    device_ci.enabledExtensionCount = required_device_extensions.size();
-    
-    if (vkCreateDevice(ctx.physical_device, &device_ci, nullptr, &ctx.device) != VK_SUCCESS) {
-        throw std::runtime_error("Could not create Vulkan device.");
-    }
+    vkDestroySwapchainKHR(device, swapchain.handle, nullptr);
 }
 
-static void window_init(GraphicsContext& ctx) {
-    wm_init(ctx.wm);
+void recreate_swapchain(VulkanGraphicsContext& ctx) {
+    vkWaitForFences(ctx.vk->device, MAX_FRAMES_IN_FLIGHT, ctx.frame_finished, VK_TRUE, UINT64_MAX);
+    Swapchain new_swapchain = create_swapchain(ctx.vk->device, ctx.vk->physical_device, ctx.surface, ctx.swapchain.handle);
+    destroy_swapchain(ctx.vk->device, ctx.swapchain);
+    ctx.swapchain = new_swapchain;
+}
+
+static void window_init(VulkanGraphicsContext& ctx, const WMContext* wm) {
+    ctx.wm = wm;
     
-    XSelectInput(ctx.wm.display,
-                 ctx.wm.window,
+    XSelectInput(ctx.wm->display,
+                 ctx.wm->window,
                  ButtonPressMask
                  | ButtonReleaseMask
                  | KeyPressMask
                  | KeyReleaseMask
                  | PointerMotionMask);
     
-    XStoreName(ctx.wm.display, ctx.wm.window, "Vulkan-gp");
+    XStoreName(ctx.wm->display, ctx.wm->window, "Vulkan-gp");
 
-    Atom protocol = XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", false);
-    XSetWMProtocols(ctx.wm.display, ctx.wm.window, &protocol, 1);
+    Atom protocol = XInternAtom(ctx.wm->display, "WM_DELETE_WINDOW", false);
+    XSetWMProtocols(ctx.wm->display, ctx.wm->window, &protocol, 1);
 
-    XMapRaised(ctx.wm.display, ctx.wm.window);
+    XMapRaised(ctx.wm->display, ctx.wm->window);
 
     VkXlibSurfaceCreateInfoKHR surface_ci{};
     surface_ci.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-    surface_ci.dpy = ctx.wm.display;
-    surface_ci.window = ctx.wm.window;
+    surface_ci.dpy = ctx.wm->display;
+    surface_ci.window = ctx.wm->window;
 
-    if (vkCreateXlibSurfaceKHR(ctx.vk.instance, &surface_ci, nullptr, &ctx.surface) != VK_SUCCESS) {
+    if (vkCreateXlibSurfaceKHR(ctx.vk->instance, &surface_ci, nullptr, &ctx.surface) != VK_SUCCESS) {
         throw std::runtime_error("Could not create X11 surface.");
     }
 
     VkBool32 surface_support;
-    vkGetPhysicalDeviceSurfaceSupportKHR(ctx.vk.physical_device, ctx.vk.graphics_queue_idx, ctx.surface, &surface_support);
+    vkGetPhysicalDeviceSurfaceSupportKHR(ctx.vk->physical_device, ctx.vk->graphics_queue_idx, ctx.surface, &surface_support);
     if (!surface_support) {
         throw std::runtime_error("Surface does not support presentation.");
     }
@@ -492,13 +311,13 @@ static void window_init(GraphicsContext& ctx) {
     VkCommandPoolCreateInfo command_pool_ci{};
     command_pool_ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     command_pool_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    command_pool_ci.queueFamilyIndex = ctx.vk.graphics_queue_idx;
+    command_pool_ci.queueFamilyIndex = ctx.vk->graphics_queue_idx;
 	
-    if (vkCreateCommandPool(ctx.vk.device, &command_pool_ci, nullptr, &ctx.command_pool) != VK_SUCCESS) {
+    if (vkCreateCommandPool(ctx.vk->device, &command_pool_ci, nullptr, &ctx.command_pool) != VK_SUCCESS) {
         throw std::runtime_error("Could not create command pool.");
     }
 
-    ctx.swapchain = create_swapchain(ctx.vk.device, ctx.vk.physical_device, ctx.surface);
+    ctx.swapchain = create_swapchain(ctx.vk->device, ctx.vk->physical_device, ctx.surface);
 
     ctx.command_buffers.resize(ctx.swapchain.images.size());
     
@@ -508,7 +327,7 @@ static void window_init(GraphicsContext& ctx) {
     command_buffer_ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     command_buffer_ai.commandBufferCount = ctx.command_buffers.size();
 
-    vkAllocateCommandBuffers(ctx.vk.device, &command_buffer_ai, ctx.command_buffers.data());
+    vkAllocateCommandBuffers(ctx.vk->device, &command_buffer_ai, ctx.command_buffers.data());
 
     VkSemaphoreCreateInfo semaphore_ci{};
     semaphore_ci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -516,70 +335,26 @@ static void window_init(GraphicsContext& ctx) {
     fence_ci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fence_ci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (vkCreateSemaphore(ctx.vk.device, &semaphore_ci, nullptr, &ctx.swapchain_image_ready[i]) != VK_SUCCESS
-            || vkCreateSemaphore(ctx.vk.device, &semaphore_ci, nullptr, &ctx.swapchain_submit_done[i]) != VK_SUCCESS
-            || vkCreateFence(ctx.vk.device, &fence_ci, nullptr, &ctx.frame_finished[i]) != VK_SUCCESS) {
+        if (vkCreateSemaphore(ctx.vk->device, &semaphore_ci, nullptr, &ctx.swapchain_image_ready[i]) != VK_SUCCESS
+            || vkCreateSemaphore(ctx.vk->device, &semaphore_ci, nullptr, &ctx.swapchain_submit_done[i]) != VK_SUCCESS
+            || vkCreateFence(ctx.vk->device, &fence_ci, nullptr, &ctx.frame_finished[i]) != VK_SUCCESS) {
             throw std::runtime_error("Could not create sync objects for frame.");
         }
     }
 }
 
-static std::vector<uint32_t> load_spirv_file(const std::string& file_name) {
-    std::ifstream file(file_name, std::ios::binary | std::ios::ate);
-
-    if (!file) {
-        throw std::runtime_error("Could not open file " + file_name);
-    }
-    
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    if (size % 4) {
-        throw std::runtime_error("Spir-V code size not a multiple of 4");
-    }
-
-    std::vector<uint32_t> buffer(size / 4);
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-        throw std::runtime_error("Could not read Spir-V code");
-    }
-
-    return buffer;
-}
-
-VkShaderModule create_shader_module(VkDevice device, const std::string& file_name) {
-    std::vector<uint32_t> code = load_spirv_file(file_name);
-
-    VkShaderModule module;
-    VkShaderModuleCreateInfo module_ci{};
-    module_ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_ci.codeSize = code.size() * 4;
-    module_ci.pCode = code.data();
-
-    if (vkCreateShaderModule(device, &module_ci, nullptr, &module) != VK_SUCCESS) {
-        throw std::runtime_error("Could not create shader module from " + file_name + ".");
-    }
-
-    return module;
-}
-
-static void destroy_image(VkDevice device, VulkanImage& image) {
-    vkDestroyImageView(device, image.view, nullptr);
-    vkFreeMemory(device, image.memory, nullptr);
-    vkDestroyImage(device, image.handle, nullptr);
-}
-
-static void pipeline_init(GraphicsContext& ctx) {
+static void pipeline_init(VulkanGraphicsContext& ctx) {
     VkPipelineShaderStageCreateInfo vertex_shader_stage{};
     vertex_shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertex_shader_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertex_shader_stage.module = create_shader_module(ctx.vk.device, "shaders/triangle.vert.spv");
+    vertex_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/triangle.vert.spv");
     vertex_shader_stage.pName = "main";
     ctx.shaders.push_back(vertex_shader_stage.module);
 
     VkPipelineShaderStageCreateInfo fragment_shader_stage{};
     fragment_shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragment_shader_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragment_shader_stage.module = create_shader_module(ctx.vk.device, "shaders/triangle.frag.spv");
+    fragment_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/triangle.frag.spv");
     fragment_shader_stage.pName = "main";
     ctx.shaders.push_back(fragment_shader_stage.module);
 
@@ -700,7 +475,7 @@ static void pipeline_init(GraphicsContext& ctx) {
     layout_ci.pushConstantRangeCount = push_constants.size();
     layout_ci.pPushConstantRanges = push_constants.data();
 
-    if (vkCreatePipelineLayout(ctx.vk.device, &layout_ci, nullptr, &ctx.pipeline_layout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(ctx.vk->device, &layout_ci, nullptr, &ctx.pipeline_layout) != VK_SUCCESS) {
         throw std::runtime_error("Could not create pipeline layout.");
     }
     
@@ -719,69 +494,44 @@ static void pipeline_init(GraphicsContext& ctx) {
     pipeline_ci.layout = ctx.pipeline_layout;
     pipeline_ci.renderPass = ctx.swapchain.render_pass;
 
-    if (vkCreateGraphicsPipelines(ctx.vk.device, VK_NULL_HANDLE, 1, &pipeline_ci, nullptr, &ctx.pipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(ctx.vk->device, VK_NULL_HANDLE, 1, &pipeline_ci, nullptr, &ctx.pipeline) != VK_SUCCESS) {
         throw std::runtime_error("Could not create graphics pipeline.");
     }
 }
 
-static void destroy_swapchain(VkDevice device, Swapchain& swapchain) {
-    vkDestroyRenderPass(device, swapchain.render_pass, nullptr);
-    
-    for (size_t i = 0; i < swapchain.images.size(); i++) {
-        vkDestroyFramebuffer(device, swapchain.framebuffers[i], nullptr);
-        vkDestroyImageView(device, swapchain.image_views[i], nullptr);
-    }
-    destroy_image(device, swapchain.depth_image);
-
-    vkDestroySwapchainKHR(device, swapchain.handle, nullptr);
-}
-
-void graphics_finalize(GraphicsContext& ctx) {
-    vkDeviceWaitIdle(ctx.vk.device);
-    
-    // Pipeline :
-    for (VkShaderModule shader : ctx.shaders) {
-        vkDestroyShaderModule(ctx.vk.device, shader, nullptr);
-    }
-    vkDestroyPipeline(ctx.vk.device, ctx.pipeline, nullptr);
-    vkDestroyPipelineLayout(ctx.vk.device, ctx.pipeline_layout, nullptr);
-
-    // Window :
-    destroy_swapchain(ctx.vk.device, ctx.swapchain);
-    
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyFence(ctx.vk.device, ctx.frame_finished[i], nullptr);
-        vkDestroySemaphore(ctx.vk.device, ctx.swapchain_image_ready[i], nullptr);
-        vkDestroySemaphore(ctx.vk.device, ctx.swapchain_submit_done[i], nullptr);
-    }
-    
-    vkDestroyCommandPool(ctx.vk.device, ctx.command_pool, nullptr);
-    vkDestroySurfaceKHR(ctx.vk.instance, ctx.surface, nullptr);
-
-    XDestroyWindow(ctx.wm.display, ctx.wm.window);
-    XCloseDisplay(ctx.wm.display);
-
-}
-
-void gpu_finalize(GPUContext& ctx) {
-    vkDestroyDevice(ctx.device, nullptr);
-    vkDestroyInstance(ctx.instance, nullptr);
-}
-
-void recreate_swapchain(GraphicsContext& ctx) {
-    vkWaitForFences(ctx.vk.device, MAX_FRAMES_IN_FLIGHT, ctx.frame_finished, VK_TRUE, UINT64_MAX);
-    Swapchain new_swapchain = create_swapchain(ctx.vk.device, ctx.vk.physical_device, ctx.surface, ctx.swapchain.handle);
-    destroy_swapchain(ctx.vk.device, ctx.swapchain);
-    ctx.swapchain = new_swapchain;
-}
-
-void graphics_init(const GPUContext& ctx, GraphicsContext& graphics) {
+void graphics_init(const VulkanContext* ctx, const WMContext* wm, VulkanGraphicsContext& graphics) {
     graphics.vk = ctx;
-    window_init(graphics);
+    
+    window_init(graphics, wm);
     pipeline_init(graphics);
     graphics.next_frame = 0;
 }
 
-void graphics_wait_idle(const GraphicsContext &ctx) {
-    vkDeviceWaitIdle(ctx.vk.device);
+void graphics_wait_idle(const VulkanGraphicsContext &ctx) {
+    vkDeviceWaitIdle(ctx.vk->device);
 }
+
+void graphics_finalize(VulkanGraphicsContext& ctx) {
+    vkDeviceWaitIdle(ctx.vk->device);
+    
+    // Pipeline :
+    for (VkShaderModule shader : ctx.shaders) {
+        vkDestroyShaderModule(ctx.vk->device, shader, nullptr);
+    }
+    vkDestroyPipeline(ctx.vk->device, ctx.pipeline, nullptr);
+    vkDestroyPipelineLayout(ctx.vk->device, ctx.pipeline_layout, nullptr);
+
+    // Window :
+    destroy_swapchain(ctx.vk->device, ctx.swapchain);
+    
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyFence(ctx.vk->device, ctx.frame_finished[i], nullptr);
+        vkDestroySemaphore(ctx.vk->device, ctx.swapchain_image_ready[i], nullptr);
+        vkDestroySemaphore(ctx.vk->device, ctx.swapchain_submit_done[i], nullptr);
+    }
+    
+    vkDestroyCommandPool(ctx.vk->device, ctx.command_pool, nullptr);
+    vkDestroySurfaceKHR(ctx.vk->instance, ctx.surface, nullptr);
+
+}
+

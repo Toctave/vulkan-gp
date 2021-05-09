@@ -1,13 +1,11 @@
-#include "render.hpp"
-
-#include "platform_vulkan.hpp"
-#include "memory_util.hpp"
+#include "../render.hpp"
+#include "../memory_util.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 
 #include <iostream>
 
-VulkanFrame begin_frame(GraphicsContext& ctx) {
+VulkanFrame begin_frame(VulkanGraphicsContext& ctx) {
     VulkanFrame frame;
     frame.frame_index = ctx.next_frame;
     frame.command_buffer = ctx.command_buffers[frame.frame_index % ctx.swapchain.images.size()];
@@ -18,11 +16,11 @@ VulkanFrame begin_frame(GraphicsContext& ctx) {
     uint32_t current_frame_in_flight = frame.frame_index % MAX_FRAMES_IN_FLIGHT;
         
     // Wait until the current frame is done rendering.
-    vkWaitForFences(ctx.vk.device, 1, &ctx.frame_finished[current_frame_in_flight], VK_TRUE, UINT64_MAX);
+    vkWaitForFences(ctx.vk->device, 1, &ctx.frame_finished[current_frame_in_flight], VK_TRUE, UINT64_MAX);
 
     VkResult acquire_result; 
     do {
-        acquire_result = vkAcquireNextImageKHR(ctx.vk.device,
+        acquire_result = vkAcquireNextImageKHR(ctx.vk->device,
                                                ctx.swapchain.handle,
                                                0,
                                                ctx.swapchain_image_ready[current_frame_in_flight],
@@ -49,7 +47,7 @@ VulkanFrame begin_frame(GraphicsContext& ctx) {
 
     // Make sure we're not rendering to an image that is being used by another in-flight frame
     if (ctx.swapchain.frames[frame.image_index] >= 0) {
-        vkWaitForFences(ctx.vk.device,
+        vkWaitForFences(ctx.vk->device,
                         1,
                         &ctx.frame_finished[ctx.swapchain.frames[frame.image_index] % MAX_FRAMES_IN_FLIGHT],
                         VK_TRUE,
@@ -109,14 +107,14 @@ VulkanFrame begin_frame(GraphicsContext& ctx) {
     return frame;
 }
 
-void end_frame(const GraphicsContext &ctx, GraphicsFrame &frame) {
+void end_frame(const VulkanGraphicsContext &ctx, GraphicsFrame &frame) {
     // Finish recording command buffer
     vkCmdEndRenderPass(frame.command_buffer);
     vkEndCommandBuffer(frame.command_buffer);
 
     // Submit command buffer
     VkQueue queue;
-    vkGetDeviceQueue(ctx.vk.device, ctx.vk.graphics_queue_idx, 0, &queue);
+    vkGetDeviceQueue(ctx.vk->device, ctx.vk->graphics_queue_idx, 0, &queue);
 
     uint32_t current_frame_in_flight = frame.frame_index % MAX_FRAMES_IN_FLIGHT;    
     
@@ -132,7 +130,7 @@ void end_frame(const GraphicsContext &ctx, GraphicsFrame &frame) {
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = &ctx.swapchain_submit_done[current_frame_in_flight];
 
-    vkResetFences(ctx.vk.device, 1, &ctx.frame_finished[current_frame_in_flight]);
+    vkResetFences(ctx.vk->device, 1, &ctx.frame_finished[current_frame_in_flight]);
     if (vkQueueSubmit(queue, 1, &submit_info, ctx.frame_finished[current_frame_in_flight]) != VK_SUCCESS) {
         throw std::runtime_error("Could not submit commands.");
     }

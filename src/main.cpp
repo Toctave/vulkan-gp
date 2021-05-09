@@ -6,10 +6,11 @@
 
 #include <string.h>
 
+#include "platform_gpu.hpp"
+#include "platform_wm.hpp"
+
 #include "time_util.hpp"
-#include "platform.hpp"
 #include "render.hpp"
-#include "compute_vulkan.hpp"
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -88,12 +89,15 @@ bool intersect(const GraphicsContext& ctx,
 int main(int argc, char** argv) {
     GPUContext gpu;
     gpu_init(gpu);
+
+    WMContext wm;
+    wm_init(wm);
     
     GraphicsContext gfx;
-    graphics_init(gpu, gfx);
+    graphics_init(&gpu, &wm, gfx);
     
     VulkanComputeContext compute;
-    compute_init(gpu, compute);
+    compute_init(&gpu, compute);
 
     std::vector<Vertex> vertices = {
         {{-.5f, -.5f, 0}, {0, 0}, {0, 0, 1}},
@@ -108,16 +112,16 @@ int main(int argc, char** argv) {
     };
     assert(indices.size() % 3 == 0);
 
-    GPUMesh plane = gpu_mesh_create(gfx.vk,
+    GPUMesh plane = gpu_mesh_create(gpu,
                                     vertices.size(),
                                     indices.size() / 3,
                                     vertices.data(),
                                     indices.data());
     
     Mesh suzanne_cpu = load_obj_mesh("suzanne_smooth.obj");
-    GPUMesh suzanne = gpu_mesh_create(gfx.vk, suzanne_cpu);
+    GPUMesh suzanne = gpu_mesh_create(gpu, suzanne_cpu);
     GPUBuffer<Vertex> base_vertices = suzanne.vertex_buffer;
-    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(gfx.vk,
+    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
                                                         (uint32_t)(COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER),
                                                         suzanne.vertex_buffer.count);
 
@@ -158,14 +162,14 @@ int main(int argc, char** argv) {
 
     
     while (true) {
-        while (XPending(gfx.wm.display)) {
+        while (XPending(wm.display)) {
             XEvent event;
-            XNextEvent(gfx.wm.display, &event);
+            XNextEvent(wm.display, &event);
 
             switch (event.type) {
             case ClientMessage:
-                if (event.xclient.message_type == XInternAtom(gfx.wm.display, "WM_PROTOCOLS", true)
-                    && event.xclient.data.l[0] == XInternAtom(gfx.wm.display, "WM_DELETE_WINDOW", true)) {
+                if (event.xclient.message_type == XInternAtom(wm.display, "WM_PROTOCOLS", true)
+                    && event.xclient.data.l[0] == XInternAtom(wm.display, "WM_DELETE_WINDOW", true)) {
                     should_close = true;
                 }
                 break;
@@ -231,7 +235,7 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
-        GPUBuffer<float> t_buf = allocate_and_fill_buffer(gfx.vk, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
+        GPUBuffer<float> t_buf = allocate_and_fill_buffer(gpu, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
         double compute_before = now_seconds();
         compute_kernel_invoke(compute,
                               kernel,
@@ -240,7 +244,7 @@ int main(int argc, char** argv) {
                               suzanne.vertex_buffer,
                               t_buf);
         compute_acc += (now_seconds() - compute_before);
-        gpu_buffer_free(gfx.vk, t_buf);
+        gpu_buffer_free(gpu, t_buf);
 
 
         // models[0].transform = glm::scale(glm::vec3(.5f))
@@ -296,12 +300,13 @@ int main(int argc, char** argv) {
     compute_kernel_destroy(compute, kernel);
     compute_finalize(compute);
     
-    gpu_mesh_destroy(gfx.vk, plane);
-    gpu_mesh_destroy(gfx.vk, suzanne);
-
-    gpu_buffer_free(gfx.vk, base_vertices);
+    gpu_mesh_destroy(gpu, plane);
+    gpu_mesh_destroy(gpu, suzanne);
+    gpu_buffer_free(gpu, base_vertices);
 
     graphics_finalize(gfx);
 
+    wm_finalize(wm);
+    
     gpu_finalize(gpu);
 }
