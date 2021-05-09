@@ -276,5 +276,4 @@ void compute_kernel_invoke(const VulkanComputeContext& ctx,
 
 void compute_init(const VulkanContext &vk, VulkanComputeContext &ctx);
 void compute_finalize(const VulkanComputeContext& ctx);
-void test_compute(const VulkanComputeContext& ctx, const GPUMesh& mesh);
 

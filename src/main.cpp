@@ -86,11 +86,14 @@ bool intersect(const GraphicsContext& ctx,
 }
 
 int main(int argc, char** argv) {
-    GraphicsContext ctx;
-    graphics_init(ctx);
+    GPUContext gpu;
+    gpu_init(gpu);
     
-    VulkanComputeContext cctx;
-    compute_init(ctx.vk, cctx);
+    GraphicsContext gfx;
+    graphics_init(gpu, gfx);
+    
+    VulkanComputeContext compute;
+    compute_init(gpu, compute);
 
     std::vector<Vertex> vertices = {
         {{-.5f, -.5f, 0}, {0, 0}, {0, 0, 1}},
@@ -105,22 +108,22 @@ int main(int argc, char** argv) {
     };
     assert(indices.size() % 3 == 0);
 
-    GPUMesh plane = gpu_mesh_create(ctx.vk,
+    GPUMesh plane = gpu_mesh_create(gfx.vk,
                                     vertices.size(),
                                     indices.size() / 3,
                                     vertices.data(),
                                     indices.data());
     
     Mesh suzanne_cpu = load_obj_mesh("suzanne_smooth.obj");
-    GPUMesh suzanne = gpu_mesh_create(ctx.vk, suzanne_cpu);
+    GPUMesh suzanne = gpu_mesh_create(gfx.vk, suzanne_cpu);
     GPUBuffer<Vertex> base_vertices = suzanne.vertex_buffer;
-    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(ctx.vk,
+    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(gfx.vk,
                                                         (uint32_t)(COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER),
                                                         suzanne.vertex_buffer.count);
 
     // test_compute(cctx, suzanne);
     auto kernel =
-        compute_kernel_create<GPUBuffer<Vertex>, GPUBuffer<Vertex>, GPUBuffer<float>>(cctx, "shaders/wiggle.comp.spv");
+        compute_kernel_create<GPUBuffer<Vertex>, GPUBuffer<Vertex>, GPUBuffer<float>>(compute, "shaders/wiggle.comp.spv");
 
     std::vector<Model> models = {
         {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
@@ -135,7 +138,7 @@ int main(int argc, char** argv) {
     glm::vec3 cam_center(0.0f, 0.0f, 0.0f);
     
     Camera cam;
-    cam.aspect = static_cast<float>(ctx.swapchain.extent.width) / static_cast<float>(ctx.swapchain.extent.height);
+    cam.aspect = static_cast<float>(gfx.swapchain.extent.width) / static_cast<float>(gfx.swapchain.extent.height);
     update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
     cam.fov = glm::radians(60.0f);
     cam.near = 0.01f;
@@ -146,6 +149,7 @@ int main(int argc, char** argv) {
     bool should_close = false;
 
     double t0 = now_seconds();
+    double compute_acc = 0.0;
     
     uint32_t mouse_button_down = 0;
 
@@ -154,20 +158,20 @@ int main(int argc, char** argv) {
 
     
     while (true) {
-        while (XPending(ctx.wm.display)) {
+        while (XPending(gfx.wm.display)) {
             XEvent event;
-            XNextEvent(ctx.wm.display, &event);
+            XNextEvent(gfx.wm.display, &event);
 
             switch (event.type) {
             case ClientMessage:
-                if (event.xclient.message_type == XInternAtom(ctx.wm.display, "WM_PROTOCOLS", true)
-                    && event.xclient.data.l[0] == XInternAtom(ctx.wm.display, "WM_DELETE_WINDOW", true)) {
+                if (event.xclient.message_type == XInternAtom(gfx.wm.display, "WM_PROTOCOLS", true)
+                    && event.xclient.data.l[0] == XInternAtom(gfx.wm.display, "WM_DELETE_WINDOW", true)) {
                     should_close = true;
                 }
                 break;
             case MotionNotify: {
-                mouse_position.x = 2.0f * event.xmotion.x / ctx.swapchain.extent.width - 1.0f;
-                mouse_position.y = 1.0f - 2.0f * event.xmotion.y / ctx.swapchain.extent.height;
+                mouse_position.x = 2.0f * event.xmotion.x / gfx.swapchain.extent.width - 1.0f;
+                mouse_position.y = 1.0f - 2.0f * event.xmotion.y / gfx.swapchain.extent.height;
 
                 if (mouse_button_down & MOUSE_MIDDLE) {
                     glm::vec2 drag = mouse_position - drag_start;
@@ -227,14 +231,17 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
-        GPUBuffer<float> t_buf = allocate_and_fill_buffer(ctx.vk, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
-        compute_kernel_invoke(cctx,
+        GPUBuffer<float> t_buf = allocate_and_fill_buffer(gfx.vk, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
+        double compute_before = now_seconds();
+        compute_kernel_invoke(compute,
                               kernel,
                               suzanne.vertex_buffer.count / 32 + 1, 1, 1,
                               base_vertices,
                               suzanne.vertex_buffer,
                               t_buf);
-        gpu_buffer_free(ctx.vk, t_buf);
+        compute_acc += (now_seconds() - compute_before);
+        gpu_buffer_free(gfx.vk, t_buf);
+
 
         // models[0].transform = glm::scale(glm::vec3(.5f))
             // * glm::translate(glm::vec3(std::sin(elapsed), 0, 0));
@@ -251,7 +258,8 @@ int main(int argc, char** argv) {
         glm::vec3 ray_d = glm::normalize(mouse_world - cam.eye);
 
         float t;
-        if (intersect(ctx, suzanne_cpu, cam.eye, ray_d, &t)) {
+        // if (intersect(ctx, suzanne_cpu, cam.eye, ray_d, &t)) {
+        if (false) {
             glm::vec3 target = cam.eye + t * ray_d;
             models[1].transform =
                 glm::translate(target);
@@ -260,35 +268,40 @@ int main(int argc, char** argv) {
                 glm::scale(glm::vec3(0.0f));
         }
 
-        GraphicsFrame frame = begin_frame(ctx);
+        GraphicsFrame frame = begin_frame(gfx);
         {
-            cam.aspect = static_cast<float>(ctx.swapchain.extent.width)
-                / static_cast<float>(ctx.swapchain.extent.height);
+            cam.aspect = static_cast<float>(gfx.swapchain.extent.width)
+                / static_cast<float>(gfx.swapchain.extent.height);
 
             for (const Model &model : models) {
                 draw_model(frame, camera_view(cam), camera_proj(cam), model);
             }
 
-            end_frame(ctx, frame);
+            end_frame(gfx, frame);
         }
 
         current_frame++;
     }
 
     double t1 = now_seconds();
-    float elapsed = static_cast<float>(t1 - t0);
+    double elapsed = (t1 - t0);
     float avg_fps = current_frame / elapsed;
     std::cout << "Average FPS : " << avg_fps << "\n";
 
-    graphics_wait_idle(ctx);
+    std::cout << "Total elapsed : " << elapsed << ", compute : " << compute_acc << "\n";
+    std::cout << "Compute : " << 100.0 * compute_acc / elapsed << "%\n";
 
-    compute_kernel_destroy(cctx, kernel);
-    compute_finalize(cctx);
+    graphics_wait_idle(gfx);
+
+    compute_kernel_destroy(compute, kernel);
+    compute_finalize(compute);
     
-    gpu_mesh_destroy(ctx.vk, plane);
-    gpu_mesh_destroy(ctx.vk, suzanne);
+    gpu_mesh_destroy(gfx.vk, plane);
+    gpu_mesh_destroy(gfx.vk, suzanne);
 
-    gpu_buffer_free(ctx.vk, base_vertices);
+    gpu_buffer_free(gfx.vk, base_vertices);
 
-    graphics_finalize(ctx);
+    graphics_finalize(gfx);
+
+    gpu_finalize(gpu);
 }

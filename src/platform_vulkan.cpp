@@ -289,7 +289,7 @@ static Swapchain create_swapchain(VkDevice device,
     return swapchain;
 }
 
-static void vulkan_init(VulkanContext& ctx) {
+void gpu_init(VulkanContext& ctx) {
     uint32_t layer_count;
     vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
 
@@ -761,9 +761,11 @@ void graphics_finalize(GraphicsContext& ctx) {
     XDestroyWindow(ctx.wm.display, ctx.wm.window);
     XCloseDisplay(ctx.wm.display);
 
-    // Vulkan :
-    vkDestroyDevice(ctx.vk.device, nullptr);
-    vkDestroyInstance(ctx.vk.instance, nullptr);
+}
+
+void gpu_finalize(GPUContext& ctx) {
+    vkDestroyDevice(ctx.device, nullptr);
+    vkDestroyInstance(ctx.instance, nullptr);
 }
 
 void recreate_swapchain(GraphicsContext& ctx) {
@@ -773,11 +775,11 @@ void recreate_swapchain(GraphicsContext& ctx) {
     ctx.swapchain = new_swapchain;
 }
 
-void graphics_init(GraphicsContext& ctx) {
-    vulkan_init(ctx.vk);
-    window_init(ctx);
-    pipeline_init(ctx);
-    ctx.next_frame = 0;
+void graphics_init(const GPUContext& ctx, GraphicsContext& graphics) {
+    graphics.vk = ctx;
+    window_init(graphics);
+    pipeline_init(graphics);
+    graphics.next_frame = 0;
 }
 
 void graphics_wait_idle(const GraphicsContext &ctx) {

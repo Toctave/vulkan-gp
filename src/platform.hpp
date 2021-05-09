@@ -23,9 +23,12 @@ using GPUBuffer = VulkanBuffer<T>;
 
 #endif
 
-void graphics_init(GraphicsContext& ctx);
-void graphics_finalize(GraphicsContext& ctx);
-void graphics_wait_idle(const GraphicsContext& ctx);
+void gpu_init(GPUContext& ctx);
+void gpu_finalize(GPUContext& ctx);
+
+void graphics_init(const GPUContext& ctx, GraphicsContext& graphics);
+void graphics_finalize(GraphicsContext& graphics);
+void graphics_wait_idle(const GraphicsContext& graphics);
 
 template<typename T>
 GPUBuffer<T> allocate_and_fill_buffer(const GPUContext& ctx,
