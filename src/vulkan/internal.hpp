@@ -1,8 +1,9 @@
 #pragma once
 
 #include <string>
-
 #include <vulkan/vulkan.h>
+
+#include "../common/platform.hpp"
 
 int32_t find_memory_type(const VkPhysicalDeviceMemoryProperties* props,
                          uint32_t memory_type_req,

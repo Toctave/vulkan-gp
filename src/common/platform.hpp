@@ -1,6 +1,8 @@
 #pragma once
 
-enum GPUBufferUsageFlags {
+#include <cstdint>
+
+enum GPUBufferUsageFlags : uint32_t {
     VERTEX_BUFFER  = 0x00000001,
     INDEX_BUFFER   = 0x00000002,
     UNIFORM_BUFFER = 0x00000004,

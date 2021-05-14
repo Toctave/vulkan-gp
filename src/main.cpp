@@ -46,8 +46,7 @@ static void update_orbit_camera(Camera& cam, float lat, float lng, float r, glm:
                         std::sin(lat));
 }
 
-bool intersect(const GraphicsContext& ctx,
-               const Mesh& mesh,
+bool intersect(const Mesh& mesh,
                const glm::vec3& ray_o,
                const glm::vec3& ray_d,
                float* t_out) {
@@ -62,7 +61,7 @@ bool intersect(const GraphicsContext& ctx,
         if (a == 0.0f)
             continue;    // ray parallel to the triangle
 
-        float f = 1.0f/a;
+        float f = 1.0f / a;
         glm::vec3 s = ray_o - mesh.vertices[mesh.indices[i * 3]].position;
         float u = f * glm::dot(s, h);
         if (u < 0.0f || u > 1.0f)
@@ -122,7 +121,7 @@ int main(int argc, char** argv) {
     GPUMesh suzanne = gpu_mesh_create(gpu, suzanne_cpu);
     GPUBuffer<Vertex> base_vertices = suzanne.vertex_buffer;
     suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
-                                                        (uint32_t)(COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER),
+                                                        COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER,
                                                         suzanne.vertex_buffer.count);
 
     // test_compute(cctx, suzanne);
@@ -247,9 +246,9 @@ int main(int argc, char** argv) {
         gpu_buffer_free(gpu, t_buf);
 
 
-        // models[0].transform = glm::scale(glm::vec3(.5f))
-            // * glm::translate(glm::vec3(std::sin(elapsed), 0, 0));
-            // * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1))
+        models[0].transform = glm::scale(glm::vec3(.5f))
+            * glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
+            * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1));
             // * glm::rotate(2.0f * static_cast<float>(M_PI) * 1.3f * freq * elapsed, glm::vec3(0, 1, 0));
 
         update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
