@@ -25,7 +25,7 @@ void graphics_finalize(GraphicsContext& graphics);
 void graphics_wait_idle(const GraphicsContext& graphics);
 
 template<typename T>
-void gpu_buffer_copy(const GPUContext& ctx, GPUBuffer<T>& buffer, const T* data, size_t offset, size_t count) {
+void gpu_buffer_upload(const GPUContext& ctx, GPUBuffer<T>& buffer, const T* data, size_t offset, size_t count) {
     T* device_ptr = gpu_buffer_map(ctx, buffer, offset, count);
 
     memcpy(device_ptr, data, sizeof(T) * count);

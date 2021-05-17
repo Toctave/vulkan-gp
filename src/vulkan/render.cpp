@@ -182,7 +182,7 @@ void draw_mesh(const GraphicsFrame& frame,
 void draw_model(const GraphicsFrame& frame,
                 const glm::mat4& view,
                 const glm::mat4& proj,
-                const Model& model) {
+                const GPUModel& model) {
     PushMatrices push;
     push.model_view = view * model.transform;
     push.mvp = proj * push.model_view;

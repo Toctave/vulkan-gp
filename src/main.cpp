@@ -55,15 +55,15 @@ bool intersect(const Mesh& mesh,
     float tmax;
 
     for (size_t i = 0; i < mesh.indices.size() / 3; i++) {
-        glm::vec3 edge1 = mesh.vertices[mesh.indices[i * 3 + 1]].position - mesh.vertices[mesh.indices[i * 3]].position;
-        glm::vec3 edge2 = mesh.vertices[mesh.indices[i * 3 + 2]].position - mesh.vertices[mesh.indices[i * 3]].position;
+        glm::vec3 edge1 = mesh.positions[mesh.indices[i * 3 + 1]] - mesh.positions[mesh.indices[i * 3]];
+        glm::vec3 edge2 = mesh.positions[mesh.indices[i * 3 + 2]] - mesh.positions[mesh.indices[i * 3]];
         glm::vec3 h = glm::cross(ray_d, edge2);
         float a = glm::dot(edge1, h);
         if (a == 0.0f)
             continue;    // ray parallel to the triangle
 
         float f = 1.0f / a;
-        glm::vec3 s = ray_o - mesh.vertices[mesh.indices[i * 3]].position;
+        glm::vec3 s = ray_o - mesh.positions[mesh.indices[i * 3]];
         float u = f * glm::dot(s, h);
         if (u < 0.0f || u > 1.0f)
             continue;
@@ -112,14 +112,10 @@ int main(int argc, char** argv) {
     };
     assert(indices.size() % 3 == 0);
 
-    GPUMesh plane = gpu_mesh_create(gpu,
-                                    vertices.size(),
-                                    indices.size() / 3,
-                                    vertices.data(),
-                                    indices.data());
-    
     Mesh suzanne = load_obj_mesh("suzanne_smooth.obj");
-    GPUMesh suzanne_gpu = gpu_mesh_create(gpu, suzanne);
+    GPUMesh suzanne_gpu = gpu_mesh_allocate(gpu, suzanne.positions.size(), suzanne.indices.size() / 3);
+    gpu_mesh_upload(gpu, suzanne_gpu, suzanne);
+    
     GPUBuffer<Vertex> base_vertices = suzanne_gpu.vertex_buffer;
     suzanne_gpu.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
                                                             COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER,
@@ -129,8 +125,10 @@ int main(int argc, char** argv) {
 
     glm::vec3* suzanne_colors = gpu_buffer_map(gpu, suzanne_gpu.color_buffer);
 
-    for (uint32_t i = 0; i < suzanne.vertices.size(); i++) {
-        suzanne_colors[i] = suzanne.vertices[i].normal * .5f + .5f;
+    for (uint32_t i = 0; i < suzanne.positions.size(); i++) {
+        suzanne_colors[i].x = suzanne.uvs[i].x;
+        suzanne_colors[i].y = suzanne.uvs[i].y;
+        suzanne_colors[i].z = 0.0f;
     }
 
     gpu_buffer_unmap(gpu, suzanne_gpu.color_buffer);
@@ -139,9 +137,8 @@ int main(int argc, char** argv) {
     auto kernel =
         compute_kernel_create<GPUBuffer<Vertex>, GPUBuffer<Vertex>, GPUBuffer<float>>(compute, "shaders/wiggle.comp.spv");
 
-    std::vector<Model> models = {
+    std::vector<GPUModel> models = {
         {&suzanne_gpu, glm::translate(glm::vec3(0, 0, 0))},
-        {&plane, glm::translate(glm::vec3(0, 0, 0))},
     };
     
     float orbit_speed = 2.0f;
@@ -157,7 +154,6 @@ int main(int argc, char** argv) {
     cam.fov = glm::radians(60.0f);
     cam.near = 0.01f;
     cam.far = 100.0f;
-
     
     uint32_t current_frame = 0;
     bool should_close = false;
@@ -192,6 +188,15 @@ int main(int argc, char** argv) {
                     cam_long += drag.x * orbit_speed;
                     cam_lat -= drag.y * orbit_speed;
                     drag_start = mouse_position;
+
+                    float deg90 = M_PI * .5f - 1.0e-6f;
+
+                    if (cam_lat > deg90) {
+                        cam_lat = deg90;
+                    }
+                    if (cam_lat < -deg90) {
+                        cam_lat = -deg90;
+                    }
                 }
 
                 break;
@@ -210,9 +215,15 @@ int main(int argc, char** argv) {
                     break;
                 case Button4: // Scroll up
                     cam_r /= 1.0f + zoom_speed;
+                    if (cam_r > cam.far) {
+                        cam_r = cam.far;
+                    }
                     break;
                 case Button5: // Scroll down
                     cam_r *= 1.0f + zoom_speed;
+                    if (cam_r < cam.near) {
+                        cam_r = cam.near;
+                    }
                     break;
                 }
                 break;
@@ -241,11 +252,15 @@ int main(int argc, char** argv) {
             break;
         }
 
+        gpu_mesh_upload(gpu, suzanne_gpu, suzanne);
+
         double t1 = now_seconds();
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
         GPUBuffer<float> t_buf = gpu_buffer_allocate<float>(gpu, COMPUTE | STORAGE_BUFFER, 1);
+        gpu_buffer_upload(gpu, t_buf, &elapsed, 0, 1);
+        
         double compute_before = now_seconds();
         compute_kernel_invoke(compute,
                               kernel,
@@ -256,38 +271,18 @@ int main(int argc, char** argv) {
         compute_acc += (now_seconds() - compute_before);
         gpu_buffer_free(gpu, t_buf);
 
-
         models[0].transform = glm::scale(glm::vec3(.5f))
             * glm::translate(glm::vec3(std::sin(elapsed), 0, 0))
             * glm::rotate(2.0f * static_cast<float>(M_PI) * freq * elapsed, glm::vec3(0, 0, 1));
-            // * glm::rotate(2.0f * static_cast<float>(M_PI) * 1.3f * freq * elapsed, glm::vec3(0, 1, 0));
 
         update_orbit_camera(cam, cam_lat, cam_long, cam_r, cam_center);
-
-        glm::mat4 viewproj_inv = glm::inverse(camera_proj(cam) * camera_view(cam));
-        
-        glm::vec4 mouse_world_h = viewproj_inv * glm::vec4(mouse_position, 0.0f, 1.0f);
-        glm::vec3 mouse_world = mouse_world_h / mouse_world_h.w;
-
-        glm::vec3 ray_d = glm::normalize(mouse_world - cam.eye);
-
-        float t;
-        // if (intersect(ctx, suzanne_cpu, cam.eye, ray_d, &t)) {
-        if (false) {
-            glm::vec3 target = cam.eye + t * ray_d;
-            models[1].transform =
-                glm::translate(target);
-        } else {
-            models[1].transform =
-                glm::scale(glm::vec3(0.0f));
-        }
 
         GraphicsFrame frame = begin_frame(gfx);
         {
             cam.aspect = static_cast<float>(gfx.swapchain.extent.width)
                 / static_cast<float>(gfx.swapchain.extent.height);
 
-            for (const Model &model : models) {
+            for (const GPUModel &model : models) {
                 draw_model(frame, camera_view(cam), camera_proj(cam), model);
             }
 
@@ -310,7 +305,6 @@ int main(int argc, char** argv) {
     compute_kernel_destroy(compute, kernel);
     compute_finalize(compute);
     
-    gpu_mesh_destroy(gpu, plane);
     gpu_mesh_destroy(gpu, suzanne_gpu);
     gpu_buffer_free(gpu, base_vertices);
 

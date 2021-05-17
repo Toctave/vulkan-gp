@@ -10,33 +10,32 @@
 
 #include "hash_tuple.hpp"
 
-const Vertex& Mesh::vertex(uint32_t face, uint32_t corner) const {
-    return vertices[indices[face * 3 + corner]];
-}
-
-Vertex& Mesh::vertex(uint32_t face, uint32_t corner) {
-    return vertices[indices[face * 3 + corner]];
-}
-
-GPUMesh gpu_mesh_create(const GPUContext& ctx,
-                        size_t vertex_count,
-                        size_t triangle_count,
-                        const Vertex* vertices,
-                        const uint32_t* indices) {
+GPUMesh gpu_mesh_allocate(const GPUContext& gpu, size_t vertex_count, size_t triangle_count) {
     GPUMesh mesh;
-    mesh.vertex_buffer = gpu_buffer_allocate<Vertex>(ctx,
+    mesh.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
                                                      VERTEX_BUFFER | STORAGE_BUFFER,
                                                      vertex_count);
-    mesh.color_buffer = gpu_buffer_allocate<glm::vec3>(ctx,
+    mesh.color_buffer = gpu_buffer_allocate<glm::vec3>(gpu,
                                                        VERTEX_BUFFER | STORAGE_BUFFER,
                                                        vertex_count);
-    mesh.index_buffer = gpu_buffer_allocate<uint32_t>(ctx,
+    mesh.index_buffer = gpu_buffer_allocate<uint32_t>(gpu,
                                                       INDEX_BUFFER,
                                                       triangle_count * 3);
-    gpu_buffer_copy(ctx, mesh.vertex_buffer, vertices, 0, vertex_count);
-    gpu_buffer_copy(ctx, mesh.index_buffer, indices, 0, triangle_count * 3);
-
     return mesh;
+}
+
+void gpu_mesh_upload(const GPUContext& gpu, GPUMesh& gpu_mesh, const Mesh& mesh) {
+    Vertex* gpu_vertices = gpu_buffer_map(gpu, gpu_mesh.vertex_buffer);
+
+    for (uint32_t i = 0; i < mesh.positions.size(); i++) {
+        gpu_vertices[i].position = mesh.positions[i];
+        gpu_vertices[i].uv = mesh.uvs[i];
+        gpu_vertices[i].normal = mesh.normals[i];
+    }
+
+    gpu_buffer_unmap(gpu, gpu_mesh.vertex_buffer);
+    
+    gpu_buffer_upload(gpu, gpu_mesh.index_buffer, mesh.indices.data(), 0, mesh.indices.size());
 }
 
 Mesh load_obj_mesh(const std::string &filename) {
@@ -99,15 +98,11 @@ Mesh load_obj_mesh(const std::string &filename) {
             std::vector<uint32_t> face_indices(face.size());
             for (uint32_t i = 0; i < face_indices.size(); i++) {
                 if (vertex_indices.find(face[i]) == vertex_indices.end()) {
-                    vertex_indices[face[i]] = mesh.vertices.size();
+                    vertex_indices[face[i]] = mesh.positions.size();
 
-                    Vertex new_vertex = {
-                        raw_positions[std::get<0>(face[i]) - 1],
-                        raw_uvs[std::get<1>(face[i]) - 1],
-                        raw_normals[std::get<2>(face[i]) - 1],
-                    };
-
-                    mesh.vertices.push_back(new_vertex);
+                    mesh.positions.push_back(raw_positions[std::get<0>(face[i]) - 1]);
+                    mesh.uvs.push_back(raw_uvs[std::get<1>(face[i]) - 1]);
+                    mesh.normals.push_back(raw_normals[std::get<2>(face[i]) - 1]);
                 }
                 face_indices[i] = vertex_indices[face[i]];
             }
@@ -135,15 +130,10 @@ Mesh load_obj_mesh(const std::string &filename) {
         }
     }
 
-    return mesh;
-}
+    assert(mesh.positions.size() == mesh.uvs.size()
+           && mesh.uvs.size() == mesh.normals.size());
 
-GPUMesh gpu_mesh_create(const GPUContext& ctx, const Mesh& mesh) {
-    return gpu_mesh_create(ctx,
-                           mesh.vertices.size(),
-                           mesh.indices.size() / 3,
-                           mesh.vertices.data(),
-                           mesh.indices.data());
+    return mesh;
 }
 
 void gpu_mesh_destroy(const GPUContext& ctx, GPUMesh& mesh) {
