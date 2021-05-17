@@ -10,20 +10,32 @@
 
 #include "hash_tuple.hpp"
 
+const Vertex& Mesh::vertex(uint32_t face, uint32_t corner) const {
+    return vertices[indices[face * 3 + corner]];
+}
+
+Vertex& Mesh::vertex(uint32_t face, uint32_t corner) {
+    return vertices[indices[face * 3 + corner]];
+}
+
 GPUMesh gpu_mesh_create(const GPUContext& ctx,
                         size_t vertex_count,
                         size_t triangle_count,
                         const Vertex* vertices,
                         const uint32_t* indices) {
     GPUMesh mesh;
-    mesh.vertex_buffer = allocate_and_fill_buffer(ctx,
-                                                  vertices,
-                                                  vertex_count,
-                                                  VERTEX_BUFFER | STORAGE_BUFFER);
-    mesh.index_buffer = allocate_and_fill_buffer(ctx,
-                                                 indices,
-                                                 triangle_count * 3,
-                                                 INDEX_BUFFER);
+    mesh.vertex_buffer = gpu_buffer_allocate<Vertex>(ctx,
+                                                     VERTEX_BUFFER | STORAGE_BUFFER,
+                                                     vertex_count);
+    mesh.color_buffer = gpu_buffer_allocate<glm::vec3>(ctx,
+                                                       VERTEX_BUFFER | STORAGE_BUFFER,
+                                                       vertex_count);
+    mesh.index_buffer = gpu_buffer_allocate<uint32_t>(ctx,
+                                                      INDEX_BUFFER,
+                                                      triangle_count * 3);
+    gpu_buffer_copy(ctx, mesh.vertex_buffer, vertices, 0, vertex_count);
+    gpu_buffer_copy(ctx, mesh.index_buffer, indices, 0, triangle_count * 3);
+
     return mesh;
 }
 
@@ -137,5 +149,6 @@ GPUMesh gpu_mesh_create(const GPUContext& ctx, const Mesh& mesh) {
 void gpu_mesh_destroy(const GPUContext& ctx, GPUMesh& mesh) {
     gpu_buffer_free(ctx, mesh.index_buffer);
     gpu_buffer_free(ctx, mesh.vertex_buffer);
+    gpu_buffer_free(ctx, mesh.color_buffer);
 }
 

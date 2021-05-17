@@ -36,9 +36,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 add_custom_target(create-shader-dir ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory shaders)
 
+set_property(TARGET ${PROJECT_NAME}
+  PROPERTY ADDITIONAL_CLEAN_FILES shaders)
+
+
 set(SHADERS
-  shaders/triangle.frag
-  shaders/triangle.vert
+  shaders/base.vert
+  shaders/phong.frag
+  shaders/flat.frag  
   shaders/wiggle.comp
   )
 

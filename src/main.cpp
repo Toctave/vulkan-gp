@@ -4,7 +4,8 @@
 #include <vector>
 #include <cmath>
 
-#include <string.h>
+#include <cstring>
+#include <cassert>
 
 #include "platform_gpu.hpp"
 #include "platform_wm.hpp"
@@ -117,19 +118,29 @@ int main(int argc, char** argv) {
                                     vertices.data(),
                                     indices.data());
     
-    Mesh suzanne_cpu = load_obj_mesh("suzanne_smooth.obj");
-    GPUMesh suzanne = gpu_mesh_create(gpu, suzanne_cpu);
-    GPUBuffer<Vertex> base_vertices = suzanne.vertex_buffer;
-    suzanne.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
-                                                        COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER,
-                                                        suzanne.vertex_buffer.count);
+    Mesh suzanne = load_obj_mesh("suzanne_smooth.obj");
+    GPUMesh suzanne_gpu = gpu_mesh_create(gpu, suzanne);
+    GPUBuffer<Vertex> base_vertices = suzanne_gpu.vertex_buffer;
+    suzanne_gpu.vertex_buffer = gpu_buffer_allocate<Vertex>(gpu,
+                                                            COMPUTE | GRAPHICS | VERTEX_BUFFER | STORAGE_BUFFER,
+                                                            suzanne_gpu.vertex_buffer.count);
 
     // test_compute(cctx, suzanne);
+
+    glm::vec3* suzanne_colors = gpu_buffer_map(gpu, suzanne_gpu.color_buffer);
+
+    for (uint32_t i = 0; i < suzanne.vertices.size(); i++) {
+        suzanne_colors[i] = suzanne.vertices[i].normal * .5f + .5f;
+    }
+
+    gpu_buffer_unmap(gpu, suzanne_gpu.color_buffer);
+    
+    
     auto kernel =
         compute_kernel_create<GPUBuffer<Vertex>, GPUBuffer<Vertex>, GPUBuffer<float>>(compute, "shaders/wiggle.comp.spv");
 
     std::vector<Model> models = {
-        {&suzanne, glm::translate(glm::vec3(0, 0, 0))},
+        {&suzanne_gpu, glm::translate(glm::vec3(0, 0, 0))},
         {&plane, glm::translate(glm::vec3(0, 0, 0))},
     };
     
@@ -234,13 +245,13 @@ int main(int argc, char** argv) {
         float elapsed = static_cast<float>(t1 - t0);
         float freq = .5f;
 
-        GPUBuffer<float> t_buf = allocate_and_fill_buffer(gpu, &elapsed, 1, COMPUTE | STORAGE_BUFFER);
+        GPUBuffer<float> t_buf = gpu_buffer_allocate<float>(gpu, COMPUTE | STORAGE_BUFFER, 1);
         double compute_before = now_seconds();
         compute_kernel_invoke(compute,
                               kernel,
-                              suzanne.vertex_buffer.count / 32 + 1, 1, 1,
+                              suzanne_gpu.vertex_buffer.count / 32 + 1, 1, 1,
                               base_vertices,
-                              suzanne.vertex_buffer,
+                              suzanne_gpu.vertex_buffer,
                               t_buf);
         compute_acc += (now_seconds() - compute_before);
         gpu_buffer_free(gpu, t_buf);
@@ -300,7 +311,7 @@ int main(int argc, char** argv) {
     compute_finalize(compute);
     
     gpu_mesh_destroy(gpu, plane);
-    gpu_mesh_destroy(gpu, suzanne);
+    gpu_mesh_destroy(gpu, suzanne_gpu);
     gpu_buffer_free(gpu, base_vertices);
 
     graphics_finalize(gfx);

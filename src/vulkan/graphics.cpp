@@ -347,14 +347,14 @@ static void pipeline_init(VulkanGraphicsContext& ctx) {
     VkPipelineShaderStageCreateInfo vertex_shader_stage{};
     vertex_shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertex_shader_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertex_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/triangle.vert.spv");
+    vertex_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/base.vert.spv");
     vertex_shader_stage.pName = "main";
     ctx.shaders.push_back(vertex_shader_stage.module);
 
     VkPipelineShaderStageCreateInfo fragment_shader_stage{};
     fragment_shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragment_shader_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragment_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/triangle.frag.spv");
+    fragment_shader_stage.module = create_shader_module(ctx.vk->device, "shaders/flat.frag.spv");
     fragment_shader_stage.pName = "main";
     ctx.shaders.push_back(fragment_shader_stage.module);
 
@@ -385,13 +385,26 @@ static void pipeline_init(VulkanGraphicsContext& ctx) {
             VK_FORMAT_R32G32B32_SFLOAT, // format
             sizeof(float) * 5,          // offset
         },
+        {
+            // Color :
+            3,                    // location
+            1,                    // binding
+            VK_FORMAT_R32G32B32_SFLOAT, // format
+            0,                    // offfset
+        },
     };
 
     std::vector<VkVertexInputBindingDescription> vertex_bindings = {
         {
-            // position :
+            // pos/uv/normal :
             0,                           // binding
             sizeof(float) * 8,           // stride
+            VK_VERTEX_INPUT_RATE_VERTEX, // input rate
+        },
+        {
+            // Color :
+            1,                           // binding
+            sizeof(float) * 3,           // stride
             VK_VERTEX_INPUT_RATE_VERTEX, // input rate
         },
     };

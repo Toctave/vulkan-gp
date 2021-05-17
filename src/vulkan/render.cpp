@@ -162,8 +162,10 @@ void draw_mesh(const GraphicsFrame& frame,
                const GPUMesh& mesh) {
     VkBuffer bind_buffers[] = {
         mesh.vertex_buffer.handle,
+        mesh.color_buffer.handle,
     };
     VkDeviceSize bind_offsets[] = {
+        0,
         0,
     };
     

@@ -13,11 +13,15 @@ static_assert(sizeof(Vertex) == sizeof(float) * 8, "Wrong size for Vertex");
 struct Mesh {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+
+    const Vertex& vertex(uint32_t face, uint32_t corner) const;
+    Vertex& vertex(uint32_t face, uint32_t corner);
 };
 
 struct GPUMesh {
     GPUBuffer<Vertex> vertex_buffer;
     GPUBuffer<uint32_t> index_buffer;
+    GPUBuffer<glm::vec3> color_buffer;
 };
 
 struct Model {

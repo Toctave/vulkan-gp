@@ -82,15 +82,20 @@ VulkanBuffer<T> gpu_buffer_allocate(const VulkanContext& vk,
 }
 
 template <typename T>
-T* gpu_buffer_map(const VulkanContext &ctx, VulkanBuffer<T>& buf) {
+T* gpu_buffer_map(const VulkanContext &ctx, VulkanBuffer<T>& buf, size_t offset, size_t count) {
     T* ptr;
 
-    if (vkMapMemory(ctx.device, buf.memory, 0, buf.count * sizeof(T), 0,
+    if (vkMapMemory(ctx.device, buf.memory, offset * sizeof(T), count * sizeof(T), 0,
                     reinterpret_cast<void **>(&ptr)) != VK_SUCCESS) {
         throw std::runtime_error("Could not bind buffer");
     }
 
     return ptr;
+}
+
+template <typename T>
+T* gpu_buffer_map(const VulkanContext &ctx, VulkanBuffer<T>& buf) {
+    return gpu_buffer_map(ctx, buf, 0, buf.count);
 }
 
 template <typename T>

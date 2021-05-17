@@ -25,18 +25,10 @@ void graphics_finalize(GraphicsContext& graphics);
 void graphics_wait_idle(const GraphicsContext& graphics);
 
 template<typename T>
-GPUBuffer<T> allocate_and_fill_buffer(const GPUContext& ctx,
-                                      const T* data,
-                                      size_t count,
-                                      uint32_t usage) {
-    GPUBuffer<T> buf = gpu_buffer_allocate<T>(ctx, usage, count);
+void gpu_buffer_copy(const GPUContext& ctx, GPUBuffer<T>& buffer, const T* data, size_t offset, size_t count) {
+    T* device_ptr = gpu_buffer_map(ctx, buffer, offset, count);
 
-    T* device_data = gpu_buffer_map(ctx, buf);
+    memcpy(device_ptr, data, sizeof(T) * count);
 
-    memcpy(device_data, data, sizeof(T) * count);
-
-    gpu_buffer_unmap(ctx, buf);
-
-    return buf;
+    gpu_buffer_unmap(ctx, buffer);
 }
-
